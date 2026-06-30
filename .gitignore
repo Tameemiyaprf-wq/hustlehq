@@ -1,0 +1,27 @@
+# Local private data
+data/
+*.csv
+*.json
+*.zip
+*.pdf
+
+# Python cache
+__pycache__/
+*.pyc
+
+# Backup files created during upgrades
+app_backup_*.py
+
+# Local repair and upgrade scripts
+repair_app.py
+fix_*.py
+upgrade_part*.py
+setup_project_files.py
+
+# System files
+.DS_Store
+Thumbs.db
+
+# Virtual environments
+venv/
+.env/
