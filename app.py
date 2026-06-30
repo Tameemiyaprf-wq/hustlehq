@@ -319,6 +319,10 @@ def load_app_settings():
         except json.JSONDecodeError:
             pass
 
+    # Force protection on so restored/old settings cannot accidentally disable login
+    default_settings["password_protection"] = True
+    save_app_settings(default_settings)
+
     return default_settings
 
 
@@ -326,16 +330,25 @@ def save_app_settings(settings):
     APP_SETTINGS_FILE.write_text(json.dumps(settings, indent=4), encoding="utf-8")
 
 
+def logout_user():
+    keys_to_clear = [
+        "authenticated",
+        "login_password_input",
+        "unlock_hustlehq_button",
+    ]
+
+    for key in keys_to_clear:
+        if key in st.session_state:
+            del st.session_state[key]
+
+    st.session_state["authenticated"] = False
+    st.rerun()
+
+
 def require_password():
     settings = load_app_settings()
 
-    if not settings.get("password_protection", True):
-        return True
-
-    if "authenticated" not in st.session_state:
-        st.session_state["authenticated"] = False
-
-    if st.session_state["authenticated"]:
+    if st.session_state.get("authenticated", False) is True:
         return True
 
     st.title("HustleHQ Login")
@@ -344,11 +357,14 @@ def require_password():
     entered_password = st.text_input(
         "Password",
         type="password",
-        placeholder="Enter password"
+        placeholder="Enter password",
+        key="login_password_input"
     )
 
-    if st.button("Unlock HustleHQ"):
-        if entered_password == settings.get("app_password", "hustlehq123"):
+    if st.button("Unlock HustleHQ", key="unlock_hustlehq_button"):
+        correct_password = settings.get("app_password", "hustlehq123")
+
+        if entered_password == correct_password:
             st.session_state["authenticated"] = True
             st.success("Access granted.")
             st.rerun()
@@ -358,12 +374,6 @@ def require_password():
     st.info("Default password: hustlehq123. Change it in Settings after logging in.")
 
     return False
-
-
-
-def logout_user():
-    st.session_state["authenticated"] = False
-    st.rerun()
 
 
 def render_sidebar_summary():
@@ -397,11 +407,15 @@ def render_sidebar_summary():
     else:
         st.sidebar.warning("Password protection off")
 
-    if st.sidebar.button("Log out"):
+    if st.sidebar.button("Log out", key="sidebar_logout_button"):
         logout_user()
 
     st.sidebar.markdown("---")
     st.sidebar.caption(f"Version {APP_VERSION} • {APP_STAGE}")
+
+
+if not require_password():
+    st.stop()
 
 
 st.sidebar.markdown("## 💼 HustleHQ")
