@@ -119,6 +119,9 @@ sample_expenses = pd.DataFrame(
         "amount": [110, 35, 20, 28, 45],
     }
 )
+APP_VERSION = "1.0.0"
+APP_STAGE = "Phase 1 MVP"
+
 DATA_FOLDER = Path("data")
 
 if DATA_FOLDER.exists() and not DATA_FOLDER.is_dir():
@@ -398,7 +401,7 @@ def render_sidebar_summary():
         logout_user()
 
     st.sidebar.markdown("---")
-    st.sidebar.caption("HustleHQ Phase 1 MVP")
+    st.sidebar.caption(f"Version {APP_VERSION} • {APP_STAGE}")
 
 
 st.sidebar.markdown("## 💼 HustleHQ")
@@ -416,6 +419,7 @@ page = st.sidebar.radio(
         "Data Backup",
         "Restore Backup",
         "PDF Report",
+        "Release Notes",
         "Settings",
     ]
 )
@@ -2836,6 +2840,78 @@ elif page == "Data Backup":
     st.info(
         "For now, restoring is manual: put the backup CSV or JSON files back into the data folder. Automatic restore can be added later."
     )
+
+
+elif page == "Release Notes":
+    st.title("Release Notes")
+    st.subheader("HustleHQ app version and feature history")
+
+    st.markdown("### Current version")
+
+    col1, col2 = st.columns(2)
+
+    col1.metric("Version", APP_VERSION)
+    col2.metric("Stage", APP_STAGE)
+
+    st.success("HustleHQ Phase 1 MVP is built, deployed and usable.")
+
+    st.markdown("### Version 1.0.0 features")
+
+    st.write("- Dashboard with income, expenses and profit overview")
+    st.write("- Add, edit and delete income records")
+    st.write("- Add, edit and delete expense records")
+    st.write("- Date tracking and tax-year filtering")
+    st.write("- Evidence Centre with missing evidence checks")
+    st.write("- HMRC-style CSV export pack")
+    st.write("- PDF report generator")
+    st.write("- Weekly Review page")
+    st.write("- Profit by side hustle analysis")
+    st.write("- Saved goal settings")
+    st.write("- Cash sprint tracker")
+    st.write("- Data Backup page")
+    st.write("- Restore Backup page")
+    st.write("- Local password protection")
+    st.write("- GitHub repo setup")
+    st.write("- Streamlit Cloud deployment")
+
+    st.markdown("### What this app is for")
+
+    st.info(
+        "HustleHQ helps track personal side-hustle income, expenses, profit, evidence and export records. "
+        "It is designed to make your side-hustle records cleaner and easier to review."
+    )
+
+    st.markdown("### What this app is not")
+
+    st.warning(
+        "This app does not file anything to HMRC, does not calculate official tax liability, "
+        "and is not professional tax advice."
+    )
+
+    st.markdown("### Suggested next upgrades")
+
+    st.write("- Add a proper database instead of local CSV files")
+    st.write("- Add login accounts for multiple users")
+    st.write("- Add cloud-safe storage")
+    st.write("- Add automatic monthly summaries")
+    st.write("- Add charts for income consistency")
+    st.write("- Add client/project-level tracking")
+    st.write("- Add invoice-style exports")
+    st.write("- Add mobile layout polish")
+
+    st.markdown("### Deployment status")
+
+    st.success("Local app: working")
+    st.success("GitHub repo: connected")
+    st.success("Streamlit deployment: working")
+
+    st.markdown("### Recommended usage")
+
+    st.write("- Keep downloading backups regularly")
+    st.write("- Avoid storing highly sensitive financial data online until database security is upgraded")
+    st.write("- Use the online version mainly for demos, testing and light tracking")
+    st.write("- Use backups before major edits or upgrades")
+
 
 
 elif page == "Settings":
