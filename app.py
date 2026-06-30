@@ -416,6 +416,7 @@ page = st.sidebar.radio(
         "Evidence Centre",
         "HMRC Export",
         "Weekly Review",
+        "Monthly Insights",
         "Data Backup",
         "Restore Backup",
         "PDF Report",
@@ -2692,6 +2693,158 @@ elif page == "PDF Report":
         st.warning("This PDF includes record issues. Check the Evidence Centre before relying on it.")
     else:
         st.success("No record issues detected for this selected period.")
+
+
+elif page == "Monthly Insights":
+    st.title("Monthly Insights")
+    st.subheader("Track monthly income, expenses, profit and side-hustle consistency")
+
+    income_records = load_income_records()
+    expense_records = load_expense_records()
+    goals = load_goal_settings()
+
+    monthly_income_goal = float(goals.get("monthly_income_goal", 500.0))
+
+    if income_records.empty and expense_records.empty:
+        st.warning("No income or expense records yet. Add records first to generate monthly insights.")
+    else:
+        income_monthly = pd.DataFrame()
+        expense_monthly = pd.DataFrame()
+
+        if not income_records.empty:
+            income_records["date"] = pd.to_datetime(income_records["date"], errors="coerce")
+            income_records["month"] = income_records["date"].dt.to_period("M").astype(str)
+
+            income_monthly = income_records.groupby("month", as_index=False)["net_income"].sum()
+            income_monthly = income_monthly.rename(columns={"net_income": "Income"})
+
+        if not expense_records.empty:
+            expense_records["date"] = pd.to_datetime(expense_records["date"], errors="coerce")
+            expense_records["month"] = expense_records["date"].dt.to_period("M").astype(str)
+
+            expense_monthly = expense_records.groupby("month", as_index=False)["amount"].sum()
+            expense_monthly = expense_monthly.rename(columns={"amount": "Expenses"})
+
+        if not income_monthly.empty and not expense_monthly.empty:
+            monthly_summary = pd.merge(income_monthly, expense_monthly, on="month", how="outer")
+        elif not income_monthly.empty:
+            monthly_summary = income_monthly.copy()
+            monthly_summary["Expenses"] = 0
+        else:
+            monthly_summary = expense_monthly.copy()
+            monthly_summary["Income"] = 0
+
+        monthly_summary["Income"] = monthly_summary["Income"].fillna(0)
+        monthly_summary["Expenses"] = monthly_summary["Expenses"].fillna(0)
+        monthly_summary["Profit"] = monthly_summary["Income"] - monthly_summary["Expenses"]
+        monthly_summary = monthly_summary.sort_values("month")
+
+        st.markdown("### Monthly performance summary")
+
+        total_months = len(monthly_summary)
+        average_monthly_income = monthly_summary["Income"].mean()
+        average_monthly_expenses = monthly_summary["Expenses"].mean()
+        average_monthly_profit = monthly_summary["Profit"].mean()
+
+        best_month_row = monthly_summary.loc[monthly_summary["Profit"].idxmax()]
+        worst_month_row = monthly_summary.loc[monthly_summary["Profit"].idxmin()]
+
+        col1, col2, col3, col4 = st.columns(4)
+
+        col1.metric("Months tracked", total_months)
+        col2.metric("Avg monthly income", f"£{average_monthly_income:,.2f}")
+        col3.metric("Avg monthly expenses", f"£{average_monthly_expenses:,.2f}")
+        col4.metric("Avg monthly profit", f"£{average_monthly_profit:,.2f}")
+
+        col5, col6 = st.columns(2)
+
+        col5.success(f"Best month: {best_month_row['month']} — £{best_month_row['Profit']:,.2f} profit")
+        col6.warning(f"Worst month: {worst_month_row['month']} — £{worst_month_row['Profit']:,.2f} profit")
+
+        st.markdown("### Monthly income vs expenses")
+
+        chart_data = monthly_summary.set_index("month")[["Income", "Expenses", "Profit"]]
+        st.bar_chart(chart_data)
+
+        st.markdown("### Monthly goal progress")
+
+        selected_month = st.selectbox(
+            "Select month",
+            monthly_summary["month"].tolist()
+        )
+
+        selected_month_data = monthly_summary[monthly_summary["month"] == selected_month].iloc[0]
+
+        selected_income = selected_month_data["Income"]
+        selected_expenses = selected_month_data["Expenses"]
+        selected_profit = selected_month_data["Profit"]
+
+        col7, col8, col9 = st.columns(3)
+
+        col7.metric("Selected month income", f"£{selected_income:,.2f}")
+        col8.metric("Selected month expenses", f"£{selected_expenses:,.2f}")
+        col9.metric("Selected month profit", f"£{selected_profit:,.2f}")
+
+        if monthly_income_goal > 0:
+            goal_progress = min(selected_income / monthly_income_goal, 1)
+            st.write(f"Monthly income goal: **£{monthly_income_goal:,.2f}**")
+            st.progress(goal_progress)
+
+            goal_gap = max(monthly_income_goal - selected_income, 0)
+
+            if goal_gap == 0:
+                st.success("This month hit or passed your monthly income goal.")
+            else:
+                st.info(f"You need **£{goal_gap:,.2f}** more income to hit this month's goal.")
+
+        st.markdown("### Profit by side hustle for selected month")
+
+        if not income_records.empty:
+            selected_income_records = income_records[income_records["month"] == selected_month].copy()
+
+            if selected_income_records.empty:
+                st.warning("No income records found for this selected month.")
+            else:
+                stream_summary = selected_income_records.groupby("income_stream", as_index=False)["net_income"].sum()
+                stream_summary = stream_summary.rename(columns={"income_stream": "Side Hustle", "net_income": "Net Income"})
+                stream_summary = stream_summary.sort_values("Net Income", ascending=False)
+
+                st.dataframe(stream_summary, use_container_width=True)
+
+                st.bar_chart(stream_summary.set_index("Side Hustle")["Net Income"])
+        else:
+            st.warning("No income records available for side-hustle breakdown.")
+
+        st.markdown("### Monthly summary table")
+
+        display_summary = monthly_summary.copy()
+        display_summary["Income"] = display_summary["Income"].map(lambda value: f"£{value:,.2f}")
+        display_summary["Expenses"] = display_summary["Expenses"].map(lambda value: f"£{value:,.2f}")
+        display_summary["Profit"] = display_summary["Profit"].map(lambda value: f"£{value:,.2f}")
+
+        st.dataframe(display_summary, use_container_width=True)
+
+        st.download_button(
+            "Download monthly summary CSV",
+            data=monthly_summary.to_csv(index=False).encode("utf-8"),
+            file_name="hustlehq_monthly_summary.csv",
+            mime="text/csv",
+        )
+
+        st.markdown("### Monthly insight notes")
+
+        if average_monthly_profit > 0:
+            st.success("Your average monthly profit is positive.")
+        elif average_monthly_profit == 0:
+            st.warning("Your average monthly profit is currently zero.")
+        else:
+            st.error("Your average monthly profit is negative. Review expenses or low-profit streams.")
+
+        if average_monthly_income >= monthly_income_goal:
+            st.success("Your average monthly income is meeting your saved monthly income goal.")
+        else:
+            st.info("Your average monthly income is below your saved monthly income goal.")
+
 
 
 elif page == "Data Backup":
