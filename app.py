@@ -414,6 +414,7 @@ page = st.sidebar.radio(
         "HMRC Export",
         "Weekly Review",
         "Data Backup",
+        "Restore Backup",
         "PDF Report",
         "Settings",
     ]
@@ -2185,6 +2186,131 @@ elif page == "Weekly Review":
 
     else:
         st.error("You are currently spending more than you are earning. Review costs before scaling.")
+elif page == "Restore Backup":
+    st.title("Restore Backup")
+    st.subheader("Restore HustleHQ records from a backup ZIP")
+
+    st.warning(
+        "This page can replace your current income records, expense records, goal settings and app settings. "
+        "Only restore a backup file you trust."
+    )
+
+    st.markdown("### Upload backup ZIP")
+
+    uploaded_backup = st.file_uploader(
+        "Upload your full HustleHQ backup ZIP",
+        type=["zip"]
+    )
+
+    confirm_restore = st.checkbox(
+        "I understand this will replace my current app data with the uploaded backup."
+    )
+
+    if uploaded_backup is not None:
+        st.info("Backup file uploaded. Tick the confirmation box, then click restore.")
+
+        if st.button("Restore from backup ZIP"):
+            if not confirm_restore:
+                st.error("Tick the confirmation box before restoring.")
+            else:
+                restored_items = []
+
+                try:
+                    with ZipFile(uploaded_backup, "r") as zip_file:
+                        zip_names = zip_file.namelist()
+
+                        if "hustlehq_income_records_backup.csv" in zip_names:
+                            income_data = zip_file.read("hustlehq_income_records_backup.csv")
+                            INCOME_FILE.write_bytes(income_data)
+                            restored_items.append("Income records")
+
+                        if "hustlehq_expense_records_backup.csv" in zip_names:
+                            expense_data = zip_file.read("hustlehq_expense_records_backup.csv")
+                            EXPENSE_FILE.write_bytes(expense_data)
+                            restored_items.append("Expense records")
+
+                        if "goals.json" in zip_names:
+                            goals_data = zip_file.read("goals.json").decode("utf-8")
+                            GOALS_FILE.write_text(goals_data, encoding="utf-8")
+                            restored_items.append("Goal settings")
+
+                        elif "hustlehq_goal_settings_backup.csv" in zip_names:
+                            goals_csv = pd.read_csv(zip_file.open("hustlehq_goal_settings_backup.csv"))
+                            restored_goals = {}
+
+                            if "Setting" in goals_csv.columns and "Value" in goals_csv.columns:
+                                for _, row in goals_csv.iterrows():
+                                    key = str(row["Setting"])
+                                    value = row["Value"]
+
+                                    try:
+                                        value = float(value)
+                                    except (ValueError, TypeError):
+                                        value = str(value)
+
+                                    restored_goals[key] = value
+
+                                save_goal_settings(restored_goals)
+                                restored_items.append("Goal settings")
+
+                        if "app_settings.json" in zip_names:
+                            app_settings_data = zip_file.read("app_settings.json").decode("utf-8")
+                            APP_SETTINGS_FILE.write_text(app_settings_data, encoding="utf-8")
+                            restored_items.append("App/password settings")
+
+                        elif "hustlehq_app_settings_backup.csv" in zip_names:
+                            app_settings_csv = pd.read_csv(zip_file.open("hustlehq_app_settings_backup.csv"))
+                            restored_app_settings = {}
+
+                            if "Setting" in app_settings_csv.columns and "Value" in app_settings_csv.columns:
+                                for _, row in app_settings_csv.iterrows():
+                                    key = str(row["Setting"])
+                                    value = row["Value"]
+
+                                    if str(value).lower() == "true":
+                                        value = True
+                                    elif str(value).lower() == "false":
+                                        value = False
+                                    else:
+                                        value = str(value)
+
+                                    restored_app_settings[key] = value
+
+                                save_app_settings(restored_app_settings)
+                                restored_items.append("App/password settings")
+
+                    if restored_items:
+                        st.success("Backup restored successfully.")
+                        st.write("Restored:")
+                        for item in restored_items:
+                            st.write(f"- {item}")
+
+                        st.info("Refresh the app to reload the restored records.")
+                    else:
+                        st.warning("No recognised HustleHQ backup files were found inside this ZIP.")
+
+                except Exception as error:
+                    st.error("Restore failed.")
+                    st.exception(error)
+
+    st.markdown("---")
+
+    st.markdown("### Restore checklist")
+
+    st.write("- Use backups downloaded from the Data Backup page.")
+    st.write("- Restoring replaces the current app records.")
+    st.write("- Refresh the app after restoring.")
+    st.write("- Download a fresh backup after checking the restored data.")
+
+    st.markdown("### Safer option")
+
+    st.info(
+        "Before restoring, download a current backup from the Data Backup page. "
+        "That gives you a fallback if you upload the wrong ZIP."
+    )
+
+
+
 elif page == "PDF Report":
     st.title("PDF Report")
     st.subheader("Generate a clean PDF summary of your HustleHQ records")
