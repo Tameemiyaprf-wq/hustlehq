@@ -133,6 +133,7 @@ INCOME_FILE = DATA_FOLDER / "income_records.csv"
 EXPENSE_FILE = DATA_FOLDER / "expense_records.csv"
 GOALS_FILE = DATA_FOLDER / "goals.json"
 APP_SETTINGS_FILE = DATA_FOLDER / "app_settings.json"
+PROJECT_FILE = DATA_FOLDER / "project_records.csv"
 
 
 def load_income_records():
@@ -376,6 +377,37 @@ def require_password():
     return False
 
 
+def load_project_records():
+    columns = [
+        "date_added",
+        "project_name",
+        "client_name",
+        "side_hustle",
+        "status",
+        "expected_income",
+        "deadline",
+        "notes",
+    ]
+
+    if PROJECT_FILE.exists():
+        records = pd.read_csv(PROJECT_FILE)
+
+        for column in columns:
+            if column not in records.columns:
+                records[column] = ""
+
+        records["expected_income"] = pd.to_numeric(records["expected_income"], errors="coerce").fillna(0)
+
+        return records[columns]
+
+    return pd.DataFrame(columns=columns)
+
+
+def save_project_records(records):
+    records.to_csv(PROJECT_FILE, index=False)
+
+
+
 def render_sidebar_summary():
     income_records = load_income_records()
     expense_records = load_expense_records()
@@ -427,6 +459,8 @@ page = st.sidebar.radio(
         "Dashboard",
         "Add Income",
         "Add Expense",
+        "Project Tracker",
+        "Invoice Draft",
         "Evidence Centre",
         "HMRC Export",
         "Weekly Review",
@@ -1598,6 +1632,399 @@ elif page == "Add Expense":
 
                 st.success("Expense record deleted successfully.")
                 st.rerun()
+
+
+elif page == "Project Tracker":
+    st.title("Project Tracker")
+    st.subheader("Track side-hustle projects before they become income")
+
+    project_records = load_project_records()
+
+    st.markdown("### Add new project")
+
+    with st.form("add_project_form"):
+        col1, col2 = st.columns(2)
+
+        with col1:
+            project_name = st.text_input("Project name")
+            client_name = st.text_input("Client/platform name")
+            side_hustle = st.selectbox(
+                "Side hustle category",
+                [
+                    "Vinted",
+                    "Legal Transcription",
+                    "YouTube",
+                    "Substack",
+                    "Etsy/Digital Products",
+                    "UGC Deals",
+                    "App Sales",
+                    "Website Builds",
+                    "Client Work",
+                    "Other",
+                ]
+            )
+
+        with col2:
+            status = st.selectbox(
+                "Project status",
+                [
+                    "Idea",
+                    "In progress",
+                    "Waiting for client",
+                    "Completed - unpaid",
+                    "Completed - paid",
+                    "Cancelled",
+                ]
+            )
+
+            expected_income = st.number_input(
+                "Expected income (£)",
+                min_value=0.0,
+                step=5.0,
+                value=0.0
+            )
+
+            deadline = st.date_input("Deadline")
+
+        notes = st.text_area("Notes")
+
+        submitted = st.form_submit_button("Save project")
+
+    if submitted:
+        if not project_name.strip():
+            st.error("Add a project name before saving.")
+        else:
+            new_project = pd.DataFrame(
+                [
+                    {
+                        "date_added": str(pd.Timestamp.today().date()),
+                        "project_name": project_name.strip(),
+                        "client_name": client_name.strip(),
+                        "side_hustle": side_hustle,
+                        "status": status,
+                        "expected_income": expected_income,
+                        "deadline": str(deadline),
+                        "notes": notes.strip(),
+                    }
+                ]
+            )
+
+            project_records = pd.concat([project_records, new_project], ignore_index=True)
+            save_project_records(project_records)
+
+            st.success("Project saved successfully.")
+            st.rerun()
+
+    st.markdown("---")
+
+    st.markdown("### Project overview")
+
+    if project_records.empty:
+        st.warning("No projects saved yet.")
+    else:
+        project_records["expected_income"] = pd.to_numeric(
+            project_records["expected_income"],
+            errors="coerce"
+        ).fillna(0)
+
+        active_projects = project_records[
+            ~project_records["status"].isin(["Completed - paid", "Cancelled"])
+        ]
+
+        unpaid_completed = project_records[
+            project_records["status"] == "Completed - unpaid"
+        ]
+
+        total_expected_income = active_projects["expected_income"].sum()
+        unpaid_expected_income = unpaid_completed["expected_income"].sum()
+
+        deadline_dates = pd.to_datetime(active_projects["deadline"], errors="coerce")
+        today = pd.Timestamp.today().normalize()
+        overdue_count = int((deadline_dates < today).sum())
+
+        col1, col2, col3, col4 = st.columns(4)
+
+        col1.metric("Total projects", len(project_records))
+        col2.metric("Active projects", len(active_projects))
+        col3.metric("Expected active income", f"£{total_expected_income:,.2f}")
+        col4.metric("Overdue projects", overdue_count)
+
+        if unpaid_expected_income > 0:
+            st.info(f"Completed but unpaid expected income: **£{unpaid_expected_income:,.2f}**")
+
+        st.markdown("### Filter projects")
+
+        status_filter = st.selectbox(
+            "Filter by status",
+            ["All"] + sorted(project_records["status"].dropna().unique().tolist())
+        )
+
+        hustle_filter = st.selectbox(
+            "Filter by side hustle",
+            ["All"] + sorted(project_records["side_hustle"].dropna().unique().tolist())
+        )
+
+        filtered_projects = project_records.copy()
+
+        if status_filter != "All":
+            filtered_projects = filtered_projects[filtered_projects["status"] == status_filter]
+
+        if hustle_filter != "All":
+            filtered_projects = filtered_projects[filtered_projects["side_hustle"] == hustle_filter]
+
+        st.dataframe(filtered_projects, use_container_width=True)
+
+        st.download_button(
+            "Download project tracker CSV",
+            data=project_records.to_csv(index=False).encode("utf-8"),
+            file_name="hustlehq_project_tracker.csv",
+            mime="text/csv",
+        )
+
+        st.markdown("### Delete a project")
+
+        delete_options = [
+            f"{index} - {row['project_name']} ({row['status']})"
+            for index, row in project_records.iterrows()
+        ]
+
+        selected_delete = st.selectbox(
+            "Choose project to delete",
+            delete_options
+        )
+
+        if st.button("Delete selected project"):
+            selected_index = int(selected_delete.split(" - ")[0])
+            project_records = project_records.drop(index=selected_index).reset_index(drop=True)
+            save_project_records(project_records)
+
+            st.success("Project deleted.")
+            st.rerun()
+
+    st.markdown("---")
+
+    st.markdown("### How to use this page")
+
+    st.write("- Add projects before they become paid income.")
+    st.write("- Mark completed unpaid work so you know what money is still expected.")
+    st.write("- Once payment arrives, add the payment on the Add Income page.")
+    st.write("- Keep this page as your side-hustle pipeline tracker.")
+
+
+
+elif page == "Invoice Draft":
+    st.title("Invoice Draft")
+    st.subheader("Create a clean invoice draft for side-hustle work")
+
+    st.warning(
+        "This creates an invoice draft for your records/client communication. "
+        "It is not official tax advice and does not file anything to HMRC."
+    )
+
+    st.markdown("### Invoice details")
+
+    with st.form("invoice_draft_form"):
+        col1, col2 = st.columns(2)
+
+        with col1:
+            invoice_number = st.text_input(
+                "Invoice number",
+                value=f"HHQ-{pd.Timestamp.today().strftime('%Y%m%d')}"
+            )
+
+            your_name = st.text_input(
+                "Your name / business name",
+                value="Tami"
+            )
+
+            client_name = st.text_input("Client/platform name")
+
+            client_email = st.text_input("Client email or contact")
+
+        with col2:
+            invoice_date = st.date_input("Invoice date")
+            due_date = st.date_input("Payment due date")
+
+            side_hustle = st.selectbox(
+                "Side hustle category",
+                [
+                    "UGC Deals",
+                    "Website Builds",
+                    "Client Work",
+                    "App Sales",
+                    "Legal Transcription",
+                    "Etsy/Digital Products",
+                    "Substack",
+                    "YouTube",
+                    "Vinted",
+                    "Other",
+                ]
+            )
+
+            amount = st.number_input(
+                "Invoice amount (£)",
+                min_value=0.0,
+                step=5.0,
+                value=0.0
+            )
+
+        service_description = st.text_area(
+            "Service / project description",
+            placeholder="Example: UGC video package, website build, transcription job, app setup, content package..."
+        )
+
+        payment_notes = st.text_area(
+            "Payment details / notes",
+            placeholder="Example: Bank transfer details, payment reference, due date reminder, agreed terms..."
+        )
+
+        submitted = st.form_submit_button("Generate invoice draft")
+
+    if submitted:
+        if not client_name.strip():
+            st.error("Add a client/platform name before generating the invoice.")
+        elif amount <= 0:
+            st.error("Add an invoice amount above £0.")
+        elif not service_description.strip():
+            st.error("Add a service or project description.")
+        else:
+            st.success("Invoice draft generated.")
+
+            invoice_text = f"""
+INVOICE
+
+Invoice number: {invoice_number}
+Invoice date: {invoice_date}
+Payment due date: {due_date}
+
+From:
+{your_name}
+
+To:
+{client_name}
+{client_email}
+
+Side-hustle category:
+{side_hustle}
+
+Service / project description:
+{service_description}
+
+Amount due:
+£{amount:,.2f}
+
+Payment details / notes:
+{payment_notes}
+
+Thank you.
+"""
+
+            st.markdown("### Invoice preview")
+
+            st.text_area(
+                "Preview",
+                value=invoice_text,
+                height=420
+            )
+
+            st.download_button(
+                "Download invoice text file",
+                data=invoice_text.encode("utf-8"),
+                file_name=f"{invoice_number}_invoice_draft.txt",
+                mime="text/plain",
+            )
+
+            st.markdown("### Download PDF invoice")
+
+            invoice_pdf_buffer = BytesIO()
+
+            pdf = canvas.Canvas(invoice_pdf_buffer, pagesize=A4)
+            width, height = A4
+
+            x_margin = 22 * mm
+            y_position = [height - 25 * mm]
+
+            def pdf_line(text_value, size=10, bold=False, gap=7):
+                if y_position[0] < 25 * mm:
+                    pdf.showPage()
+                    y_position[0] = height - 25 * mm
+
+                font_name = "Helvetica-Bold" if bold else "Helvetica"
+                pdf.setFont(font_name, size)
+
+                safe_text = str(text_value).replace("£", "GBP ")
+                pdf.drawString(x_margin, y_position[0], safe_text)
+                y_position[0] -= gap * mm
+
+            def pdf_wrapped(text_value, size=10, gap=5):
+                safe_text = str(text_value).replace("£", "GBP ")
+                words = safe_text.split()
+                line = ""
+
+                for word in words:
+                    test_line = f"{line} {word}".strip()
+
+                    if len(test_line) > 85:
+                        pdf_line(line, size=size, gap=gap)
+                        line = word
+                    else:
+                        line = test_line
+
+                if line:
+                    pdf_line(line, size=size, gap=gap)
+
+            pdf_line("INVOICE", size=20, bold=True, gap=10)
+            pdf_line(f"Invoice number: {invoice_number}", bold=True)
+            pdf_line(f"Invoice date: {invoice_date}")
+            pdf_line(f"Payment due date: {due_date}")
+            pdf_line("")
+
+            pdf_line("From:", bold=True)
+            pdf_wrapped(your_name)
+            pdf_line("")
+
+            pdf_line("To:", bold=True)
+            pdf_wrapped(client_name)
+            if client_email.strip():
+                pdf_wrapped(client_email)
+            pdf_line("")
+
+            pdf_line("Side-hustle category:", bold=True)
+            pdf_wrapped(side_hustle)
+            pdf_line("")
+
+            pdf_line("Service / project description:", bold=True)
+            pdf_wrapped(service_description)
+            pdf_line("")
+
+            pdf_line("Amount due:", bold=True)
+            pdf_line(f"GBP {amount:,.2f}", size=14, bold=True)
+            pdf_line("")
+
+            pdf_line("Payment details / notes:", bold=True)
+            pdf_wrapped(payment_notes if payment_notes.strip() else "No payment notes added.")
+            pdf_line("")
+
+            pdf_line("Thank you.", bold=True)
+
+            pdf.save()
+
+            st.download_button(
+                "Download invoice PDF",
+                data=invoice_pdf_buffer.getvalue(),
+                file_name=f"{invoice_number}_invoice_draft.pdf",
+                mime="application/pdf",
+            )
+
+    st.markdown("---")
+
+    st.markdown("### How to use this page")
+
+    st.write("- Use this when a side-hustle project is ready to bill.")
+    st.write("- Save the PDF/text invoice for your records.")
+    st.write("- When payment arrives, log the money on the Add Income page.")
+    st.write("- Keep invoice copies as supporting evidence.")
+
 
 
 elif page == "Evidence Centre":
