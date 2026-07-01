@@ -523,6 +523,7 @@ page = st.sidebar.radio(
         "Add Income",
         "Import Income CSV",
         "Add Expense",
+        "Import Expense CSV",
         "Project Tracker",
         "Invoice Draft",
         "Invoice History",
@@ -2787,6 +2788,217 @@ elif page == "Convert Invoice to Income":
     st.write("- Mark it as Paid once payment arrives.")
     st.write("- Then use this page to create the income record automatically.")
     st.write("- After conversion, the income will appear on your Dashboard and exports.")
+
+
+
+elif page == "Import Expense CSV":
+    st.title("Import Expense CSV")
+    st.subheader("Upload expense records from a CSV file")
+
+    st.warning(
+        "Use this page to import expense records from bank exports, platform fee reports, receipt trackers or manual spreadsheets. "
+        "Always check the preview before saving imported expenses."
+    )
+
+    uploaded_file = st.file_uploader(
+        "Upload expense CSV file",
+        type=["csv"],
+        key="expense_csv_upload"
+    )
+
+    if uploaded_file is None:
+        st.info("Upload a CSV file to begin.")
+    else:
+        try:
+            imported_df = pd.read_csv(uploaded_file)
+
+            if imported_df.empty:
+                st.error("The uploaded CSV is empty.")
+            else:
+                st.markdown("### Uploaded file preview")
+                st.dataframe(imported_df.head(20), use_container_width=True)
+
+                st.markdown("### Map your columns")
+
+                csv_columns = imported_df.columns.tolist()
+                none_option = "None"
+
+                def guess_column(possible_names):
+                    for possible_name in possible_names:
+                        for column in csv_columns:
+                            if possible_name.lower() in column.lower():
+                                return column
+                    return csv_columns[0] if csv_columns else none_option
+
+                date_guess = guess_column(["date", "transaction", "purchased", "paid"])
+                description_guess = guess_column(["description", "merchant", "supplier", "item", "notes"])
+                amount_guess = guess_column(["amount", "cost", "total", "price", "debit"])
+                category_guess = guess_column(["category", "type"])
+
+                date_column = st.selectbox(
+                    "Date column",
+                    csv_columns,
+                    index=csv_columns.index(date_guess) if date_guess in csv_columns else 0
+                )
+
+                description_column = st.selectbox(
+                    "Description/supplier column",
+                    csv_columns,
+                    index=csv_columns.index(description_guess) if description_guess in csv_columns else 0
+                )
+
+                amount_column = st.selectbox(
+                    "Expense amount column",
+                    csv_columns,
+                    index=csv_columns.index(amount_guess) if amount_guess in csv_columns else 0
+                )
+
+                category_column = st.selectbox(
+                    "Expense category column",
+                    [none_option] + csv_columns,
+                    index=([none_option] + csv_columns).index(category_guess) if category_guess in csv_columns else 0
+                )
+
+                receipt_column = st.selectbox(
+                    "Receipt/evidence/reference column",
+                    [none_option] + csv_columns,
+                    index=0
+                )
+
+                default_category = st.selectbox(
+                    "Default expense category if no category column is used",
+                    [
+                        "Postage",
+                        "Packaging",
+                        "Platform Fees",
+                        "Software",
+                        "Equipment",
+                        "Travel",
+                        "Marketing",
+                        "Stock/Inventory",
+                        "Subscriptions",
+                        "Other",
+                    ]
+                )
+
+                add_import_tag = st.checkbox(
+                    "Add CSV import tag to receipt/evidence",
+                    value=True
+                )
+
+                make_amounts_positive = st.checkbox(
+                    "Convert negative bank amounts into positive expense values",
+                    value=True
+                )
+
+                if st.button("Preview converted expense records"):
+                    preview_records = imported_df.copy()
+
+                    preview_records["_date"] = pd.to_datetime(preview_records[date_column], errors="coerce")
+                    preview_records["_amount"] = pd.to_numeric(preview_records[amount_column], errors="coerce").fillna(0)
+
+                    if make_amounts_positive:
+                        preview_records["_amount"] = preview_records["_amount"].abs()
+
+                    if category_column != none_option:
+                        preview_records["_expense_category"] = preview_records[category_column].astype(str)
+                    else:
+                        preview_records["_expense_category"] = default_category
+
+                    preview_records["_description"] = preview_records[description_column].astype(str)
+
+                    if receipt_column != none_option:
+                        preview_records["_receipt"] = preview_records[receipt_column].astype(str)
+                    else:
+                        preview_records["_receipt"] = "Imported from CSV"
+
+                    if add_import_tag:
+                        preview_records["_receipt"] = preview_records["_receipt"] + " | CSV import"
+
+                    converted_records = pd.DataFrame(
+                        {
+                            "date": preview_records["_date"].dt.date.astype(str),
+                            "expense_category": preview_records["_expense_category"],
+                            "description": preview_records["_description"],
+                            "amount": preview_records["_amount"],
+                            "receipt": preview_records["_receipt"],
+                        }
+                    )
+
+                    converted_records = converted_records[
+                        converted_records["amount"] > 0
+                    ].copy()
+
+                    st.session_state["expense_import_preview"] = converted_records
+
+                if "expense_import_preview" in st.session_state:
+                    converted_records = st.session_state["expense_import_preview"]
+
+                    st.markdown("### Converted expense preview")
+
+                    if converted_records.empty:
+                        st.error("No valid expense records found after conversion. Check your amount column.")
+                    else:
+                        st.dataframe(converted_records, use_container_width=True)
+
+                        total_import_expenses = converted_records["amount"].sum()
+
+                        col1, col2 = st.columns(2)
+                        col1.metric("Records ready to import", len(converted_records))
+                        col2.metric("Expenses ready to import", f"£{total_import_expenses:,.2f}")
+
+                        existing_expenses = load_expense_records()
+
+                        duplicate_count = 0
+
+                        if not existing_expenses.empty:
+                            existing_receipts = []
+
+                            if "receipt" in existing_expenses.columns:
+                                existing_receipts = existing_expenses["receipt"].astype(str).tolist()
+                            elif "evidence" in existing_expenses.columns:
+                                existing_receipts = existing_expenses["evidence"].astype(str).tolist()
+
+                            for receipt_value in converted_records["receipt"].astype(str).tolist():
+                                if receipt_value in existing_receipts:
+                                    duplicate_count += 1
+
+                        if duplicate_count > 0:
+                            st.warning(f"{duplicate_count} possible duplicate expense record(s) found based on receipt/reference text.")
+
+                        confirm_import = st.checkbox(
+                            "I have checked the preview and want to save these expense records."
+                        )
+
+                        if st.button("Save imported expense records"):
+                            if not confirm_import:
+                                st.error("Tick the confirmation box before saving.")
+                            else:
+                                updated_expenses = pd.concat(
+                                    [existing_expenses, converted_records],
+                                    ignore_index=True
+                                )
+
+                                save_expense_records(updated_expenses)
+
+                                st.success("Imported expense records saved successfully.")
+                                st.info("Go to Dashboard, Add Expense or Tax-Year Summary to review the imported records.")
+
+                                del st.session_state["expense_import_preview"]
+
+        except Exception as error:
+            st.error("CSV import failed.")
+            st.exception(error)
+
+    st.markdown("---")
+
+    st.markdown("### CSV import tips")
+
+    st.write("- Your CSV should have at least a date column, description column and amount column.")
+    st.write("- Bank exports may show expenses as negative numbers. Use the checkbox to convert them into positive expenses.")
+    st.write("- Preview before saving.")
+    st.write("- Imported records are added to your main expense records.")
+    st.write("- Keep the original receipt, bank export or platform report as evidence.")
 
 
 
