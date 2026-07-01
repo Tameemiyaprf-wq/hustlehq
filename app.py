@@ -134,6 +134,7 @@ EXPENSE_FILE = DATA_FOLDER / "expense_records.csv"
 GOALS_FILE = DATA_FOLDER / "goals.json"
 APP_SETTINGS_FILE = DATA_FOLDER / "app_settings.json"
 PROJECT_FILE = DATA_FOLDER / "project_records.csv"
+INVOICE_FILE = DATA_FOLDER / "invoice_records.csv"
 
 
 def load_income_records():
@@ -408,6 +409,39 @@ def save_project_records(records):
 
 
 
+def load_invoice_records():
+    columns = [
+        "invoice_date",
+        "invoice_number",
+        "client_name",
+        "client_email",
+        "side_hustle",
+        "service_description",
+        "amount",
+        "due_date",
+        "status",
+        "payment_notes",
+    ]
+
+    if INVOICE_FILE.exists():
+        records = pd.read_csv(INVOICE_FILE)
+
+        for column in columns:
+            if column not in records.columns:
+                records[column] = ""
+
+        records["amount"] = pd.to_numeric(records["amount"], errors="coerce").fillna(0)
+
+        return records[columns]
+
+    return pd.DataFrame(columns=columns)
+
+
+def save_invoice_records(records):
+    records.to_csv(INVOICE_FILE, index=False)
+
+
+
 def render_sidebar_summary():
     income_records = load_income_records()
     expense_records = load_expense_records()
@@ -461,6 +495,7 @@ page = st.sidebar.radio(
         "Add Expense",
         "Project Tracker",
         "Invoice Draft",
+        "Invoice History",
         "Evidence Centre",
         "HMRC Export",
         "Weekly Review",
@@ -2016,6 +2051,47 @@ Thank you.
                 mime="application/pdf",
             )
 
+            st.markdown("### Save invoice to history")
+
+            invoice_status = st.selectbox(
+                "Invoice status",
+                [
+                    "Draft",
+                    "Sent",
+                    "Awaiting payment",
+                    "Paid",
+                    "Overdue",
+                    "Cancelled",
+                ],
+                key="invoice_draft_status"
+            )
+
+            if st.button("Save invoice to Invoice History", key="save_invoice_to_history"):
+                invoice_records = load_invoice_records()
+
+                new_invoice_record = pd.DataFrame(
+                    [
+                        {
+                            "invoice_date": str(invoice_date),
+                            "invoice_number": invoice_number,
+                            "client_name": client_name.strip(),
+                            "client_email": client_email.strip(),
+                            "side_hustle": side_hustle,
+                            "service_description": service_description.strip(),
+                            "amount": amount,
+                            "due_date": str(due_date),
+                            "status": invoice_status,
+                            "payment_notes": payment_notes.strip(),
+                        }
+                    ]
+                )
+
+                invoice_records = pd.concat([invoice_records, new_invoice_record], ignore_index=True)
+                save_invoice_records(invoice_records)
+
+                st.success("Invoice saved to Invoice History.")
+
+
     st.markdown("---")
 
     st.markdown("### How to use this page")
@@ -2024,6 +2100,147 @@ Thank you.
     st.write("- Save the PDF/text invoice for your records.")
     st.write("- When payment arrives, log the money on the Add Income page.")
     st.write("- Keep invoice copies as supporting evidence.")
+
+
+
+elif page == "Invoice History":
+    st.title("Invoice History")
+    st.subheader("Track invoice drafts, sent invoices and outstanding payments")
+
+    invoice_records = load_invoice_records()
+
+    if invoice_records.empty:
+        st.warning("No invoices saved yet. Create one on the Invoice Draft page first.")
+    else:
+        invoice_records["amount"] = pd.to_numeric(invoice_records["amount"], errors="coerce").fillna(0)
+        invoice_records["due_date"] = pd.to_datetime(invoice_records["due_date"], errors="coerce")
+        today = pd.Timestamp.today().normalize()
+
+        unpaid_statuses = ["Draft", "Sent", "Awaiting payment", "Overdue"]
+        unpaid_invoices = invoice_records[invoice_records["status"].isin(unpaid_statuses)]
+        paid_invoices = invoice_records[invoice_records["status"] == "Paid"]
+
+        overdue_count = int(
+            (
+                invoice_records["due_date"].notna()
+                & (invoice_records["due_date"] < today)
+                & invoice_records["status"].isin(["Sent", "Awaiting payment", "Overdue"])
+            ).sum()
+        )
+
+        total_invoiced = invoice_records["amount"].sum()
+        total_paid = paid_invoices["amount"].sum()
+        total_outstanding = unpaid_invoices["amount"].sum()
+
+        st.markdown("### Invoice summary")
+
+        col1, col2, col3, col4 = st.columns(4)
+
+        col1.metric("Invoices saved", len(invoice_records))
+        col2.metric("Total invoiced", f"£{total_invoiced:,.2f}")
+        col3.metric("Paid invoices", f"£{total_paid:,.2f}")
+        col4.metric("Outstanding", f"£{total_outstanding:,.2f}")
+
+        if overdue_count > 0:
+            st.error(f"You have {overdue_count} overdue invoice(s).")
+        else:
+            st.success("No overdue invoices detected.")
+
+        st.markdown("### Filter invoices")
+
+        status_filter = st.selectbox(
+            "Filter by status",
+            ["All"] + sorted(invoice_records["status"].dropna().unique().tolist())
+        )
+
+        hustle_filter = st.selectbox(
+            "Filter by side hustle",
+            ["All"] + sorted(invoice_records["side_hustle"].dropna().unique().tolist())
+        )
+
+        filtered_invoices = invoice_records.copy()
+
+        if status_filter != "All":
+            filtered_invoices = filtered_invoices[filtered_invoices["status"] == status_filter]
+
+        if hustle_filter != "All":
+            filtered_invoices = filtered_invoices[filtered_invoices["side_hustle"] == hustle_filter]
+
+        display_invoices = filtered_invoices.copy()
+        display_invoices["amount"] = display_invoices["amount"].map(lambda value: f"£{value:,.2f}")
+
+        st.dataframe(display_invoices, use_container_width=True)
+
+        st.download_button(
+            "Download invoice history CSV",
+            data=invoice_records.to_csv(index=False).encode("utf-8"),
+            file_name="hustlehq_invoice_history.csv",
+            mime="text/csv",
+        )
+
+        st.markdown("### Update invoice status")
+
+        update_options = [
+            f"{index} - {row['invoice_number']} - {row['client_name']} ({row['status']})"
+            for index, row in invoice_records.iterrows()
+        ]
+
+        selected_update = st.selectbox(
+            "Choose invoice to update",
+            update_options,
+            key="invoice_status_update_select"
+        )
+
+        new_status = st.selectbox(
+            "New status",
+            [
+                "Draft",
+                "Sent",
+                "Awaiting payment",
+                "Paid",
+                "Overdue",
+                "Cancelled",
+            ],
+            key="invoice_status_update_value"
+        )
+
+        if st.button("Update selected invoice status"):
+            selected_index = int(selected_update.split(" - ")[0])
+            invoice_records.loc[selected_index, "status"] = new_status
+            save_invoice_records(invoice_records)
+
+            st.success("Invoice status updated.")
+            st.rerun()
+
+        st.markdown("### Delete invoice")
+
+        delete_options = [
+            f"{index} - {row['invoice_number']} - {row['client_name']}"
+            for index, row in invoice_records.iterrows()
+        ]
+
+        selected_delete = st.selectbox(
+            "Choose invoice to delete",
+            delete_options,
+            key="delete_invoice_select"
+        )
+
+        if st.button("Delete selected invoice"):
+            selected_index = int(selected_delete.split(" - ")[0])
+            invoice_records = invoice_records.drop(index=selected_index).reset_index(drop=True)
+            save_invoice_records(invoice_records)
+
+            st.success("Invoice deleted.")
+            st.rerun()
+
+    st.markdown("---")
+
+    st.markdown("### How to use this page")
+
+    st.write("- Save invoice drafts from the Invoice Draft page.")
+    st.write("- Mark invoices as Sent, Awaiting payment, Paid, Overdue or Cancelled.")
+    st.write("- When an invoice is paid, also add the payment on the Add Income page.")
+    st.write("- Use this page to track money you are owed.")
 
 
 
