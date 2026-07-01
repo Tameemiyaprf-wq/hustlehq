@@ -136,6 +136,7 @@ APP_SETTINGS_FILE = DATA_FOLDER / "app_settings.json"
 PROJECT_FILE = DATA_FOLDER / "project_records.csv"
 INVOICE_FILE = DATA_FOLDER / "invoice_records.csv"
 RECURRING_EXPENSE_FILE = DATA_FOLDER / "recurring_expense_records.csv"
+CONTACT_FILE = DATA_FOLDER / "contact_records.csv"
 
 
 def load_income_records():
@@ -518,6 +519,39 @@ def estimate_monthly_recurring_cost(amount, frequency):
 
 
 
+def load_contact_records():
+    columns = [
+        "date_added",
+        "contact_name",
+        "company_platform",
+        "email_or_contact",
+        "contact_type",
+        "status",
+        "expected_value",
+        "last_contacted",
+        "follow_up_date",
+        "notes",
+    ]
+
+    if CONTACT_FILE.exists():
+        records = pd.read_csv(CONTACT_FILE)
+
+        for column in columns:
+            if column not in records.columns:
+                records[column] = ""
+
+        records["expected_value"] = pd.to_numeric(records["expected_value"], errors="coerce").fillna(0)
+
+        return records[columns]
+
+    return pd.DataFrame(columns=columns)
+
+
+def save_contact_records(records):
+    records.to_csv(CONTACT_FILE, index=False)
+
+
+
 def render_sidebar_summary():
     income_records = load_income_records()
     expense_records = load_expense_records()
@@ -573,6 +607,7 @@ page = st.sidebar.radio(
         "Import Expense CSV",
         "Recurring Expenses",
         "Project Tracker",
+        "Client / Contact Tracker",
         "Invoice Draft",
         "Invoice History",
         "Payment Chase",
@@ -3308,6 +3343,251 @@ elif page == "Recurring Expenses":
     st.write("- Use monthly and yearly estimates to see how much your side hustles really cost.")
     st.write("- Convert a recurring expense into an actual expense when it is paid.")
     st.write("- Keep cancelled expenses recorded if you want history, or delete them if not needed.")
+
+
+
+elif page == "Client / Contact Tracker":
+    st.title("Client / Contact Tracker")
+    st.subheader("Track brands, clients, platforms and side-hustle contacts")
+
+    contact_records = load_contact_records()
+
+    st.markdown("### Add new contact")
+
+    with st.form("add_contact_form"):
+        col1, col2 = st.columns(2)
+
+        with col1:
+            contact_name = st.text_input(
+                "Contact name",
+                placeholder="Example: Sarah, Hiring Team, Brand Manager"
+            )
+
+            company_platform = st.text_input(
+                "Company / platform",
+                placeholder="Example: Vinted, Test Brand, Local Business"
+            )
+
+            email_or_contact = st.text_input(
+                "Email / contact details",
+                placeholder="Example: email, Instagram handle, website, phone"
+            )
+
+            contact_type = st.selectbox(
+                "Contact type",
+                [
+                    "UGC Brand",
+                    "Website Client",
+                    "App Sales Lead",
+                    "Transcription Platform",
+                    "Digital Product Customer",
+                    "Repeat Buyer",
+                    "Supplier",
+                    "Collaborator",
+                    "Other",
+                ]
+            )
+
+        with col2:
+            status = st.selectbox(
+                "Status",
+                [
+                    "Lead",
+                    "Contacted",
+                    "Waiting for reply",
+                    "In discussion",
+                    "Won / Active",
+                    "Completed",
+                    "Lost / No reply",
+                    "Paused",
+                ]
+            )
+
+            expected_value = st.number_input(
+                "Expected value (£)",
+                min_value=0.0,
+                step=5.0,
+                value=0.0
+            )
+
+            last_contacted = st.date_input("Last contacted date")
+            follow_up_date = st.date_input("Follow-up date")
+
+        notes = st.text_area("Notes")
+
+        submitted = st.form_submit_button("Save contact")
+
+    if submitted:
+        if not contact_name.strip() and not company_platform.strip():
+            st.error("Add at least a contact name or company/platform before saving.")
+        else:
+            new_contact = pd.DataFrame(
+                [
+                    {
+                        "date_added": str(pd.Timestamp.today().date()),
+                        "contact_name": contact_name.strip(),
+                        "company_platform": company_platform.strip(),
+                        "email_or_contact": email_or_contact.strip(),
+                        "contact_type": contact_type,
+                        "status": status,
+                        "expected_value": expected_value,
+                        "last_contacted": str(last_contacted),
+                        "follow_up_date": str(follow_up_date),
+                        "notes": notes.strip(),
+                    }
+                ]
+            )
+
+            contact_records = pd.concat([contact_records, new_contact], ignore_index=True)
+            save_contact_records(contact_records)
+
+            st.success("Contact saved successfully.")
+            st.rerun()
+
+    st.markdown("---")
+
+    st.markdown("### Contact overview")
+
+    if contact_records.empty:
+        st.warning("No contacts saved yet.")
+    else:
+        contact_records["expected_value"] = pd.to_numeric(
+            contact_records["expected_value"],
+            errors="coerce"
+        ).fillna(0)
+
+        active_statuses = ["Lead", "Contacted", "Waiting for reply", "In discussion", "Won / Active"]
+        active_contacts = contact_records[contact_records["status"].isin(active_statuses)].copy()
+
+        total_expected_value = active_contacts["expected_value"].sum() if not active_contacts.empty else 0
+
+        follow_up_dates = pd.to_datetime(active_contacts["follow_up_date"], errors="coerce") if not active_contacts.empty else pd.Series(dtype="datetime64[ns]")
+        today = pd.Timestamp.today().normalize()
+
+        follow_ups_due = int(((follow_up_dates >= today) & (follow_up_dates <= today + pd.Timedelta(days=7))).sum()) if not active_contacts.empty else 0
+        overdue_follow_ups = int((follow_up_dates < today).sum()) if not active_contacts.empty else 0
+
+        col1, col2, col3, col4 = st.columns(4)
+
+        col1.metric("Contacts saved", len(contact_records))
+        col2.metric("Active contacts", len(active_contacts))
+        col3.metric("Active expected value", f"£{total_expected_value:,.2f}")
+        col4.metric("Follow-ups due", follow_ups_due)
+
+        alert1, alert2 = st.columns(2)
+
+        if follow_ups_due > 0:
+            alert1.warning(f"{follow_ups_due} follow-up(s) due within 7 days.")
+        else:
+            alert1.success("No follow-ups due within 7 days.")
+
+        if overdue_follow_ups > 0:
+            alert2.error(f"{overdue_follow_ups} follow-up(s) appear overdue.")
+        else:
+            alert2.success("No overdue follow-ups.")
+
+        st.markdown("### Filter contacts")
+
+        status_filter = st.selectbox(
+            "Filter by status",
+            ["All"] + sorted(contact_records["status"].dropna().unique().tolist())
+        )
+
+        type_filter = st.selectbox(
+            "Filter by contact type",
+            ["All"] + sorted(contact_records["contact_type"].dropna().unique().tolist())
+        )
+
+        filtered_contacts = contact_records.copy()
+
+        if status_filter != "All":
+            filtered_contacts = filtered_contacts[filtered_contacts["status"] == status_filter]
+
+        if type_filter != "All":
+            filtered_contacts = filtered_contacts[filtered_contacts["contact_type"] == type_filter]
+
+        display_contacts = filtered_contacts.copy()
+        display_contacts["expected_value"] = pd.to_numeric(
+            display_contacts["expected_value"],
+            errors="coerce"
+        ).fillna(0)
+
+        st.dataframe(display_contacts, use_container_width=True)
+
+        st.download_button(
+            "Download contacts CSV",
+            data=contact_records.to_csv(index=False).encode("utf-8"),
+            file_name="hustlehq_contacts.csv",
+            mime="text/csv",
+        )
+
+        st.markdown("### Update contact status")
+
+        update_options = [
+            f"{index} - {row['contact_name']} - {row['company_platform']} ({row['status']})"
+            for index, row in contact_records.iterrows()
+        ]
+
+        selected_update = st.selectbox(
+            "Choose contact to update",
+            update_options,
+            key="contact_status_update_select"
+        )
+
+        new_status = st.selectbox(
+            "New status",
+            [
+                "Lead",
+                "Contacted",
+                "Waiting for reply",
+                "In discussion",
+                "Won / Active",
+                "Completed",
+                "Lost / No reply",
+                "Paused",
+            ],
+            key="contact_status_update_value"
+        )
+
+        if st.button("Update selected contact status"):
+            selected_index = int(selected_update.split(" - ")[0])
+            contact_records.loc[selected_index, "status"] = new_status
+            contact_records.loc[selected_index, "last_contacted"] = str(pd.Timestamp.today().date())
+            save_contact_records(contact_records)
+
+            st.success("Contact status updated.")
+            st.rerun()
+
+        st.markdown("### Delete contact")
+
+        delete_options = [
+            f"{index} - {row['contact_name']} - {row['company_platform']}"
+            for index, row in contact_records.iterrows()
+        ]
+
+        selected_delete = st.selectbox(
+            "Choose contact to delete",
+            delete_options,
+            key="delete_contact_select"
+        )
+
+        if st.button("Delete selected contact"):
+            selected_index = int(selected_delete.split(" - ")[0])
+            contact_records = contact_records.drop(index=selected_index).reset_index(drop=True)
+            save_contact_records(contact_records)
+
+            st.success("Contact deleted.")
+            st.rerun()
+
+    st.markdown("---")
+
+    st.markdown("### How to use this page")
+
+    st.write("- Add contacts before they become paid projects or invoices.")
+    st.write("- Use follow-up dates so leads do not go cold.")
+    st.write("- Use expected value to estimate your pipeline.")
+    st.write("- When a contact becomes actual work, add it to Project Tracker.")
+    st.write("- When work is ready to bill, create an invoice from Invoice Draft.")
 
 
 
