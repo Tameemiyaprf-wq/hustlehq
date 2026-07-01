@@ -530,6 +530,7 @@ page = st.sidebar.radio(
         "Evidence Centre",
         "HMRC Export",
         "Tax-Year Summary",
+        "Tax Set-Aside Calculator",
         "Weekly Review",
         "Monthly Insights",
         "Data Backup",
@@ -3174,6 +3175,173 @@ elif page == "Tax-Year Summary":
     st.write("- Keep receipts, invoices, platform statements and bank evidence.")
     st.write("- Use HMRC Export for the fuller record pack.")
     st.write("- This page is for organisation, not official tax filing.")
+
+
+
+elif page == "Tax Set-Aside Calculator":
+    st.title("Tax Set-Aside Calculator")
+    st.subheader("Estimate how much side-hustle profit to reserve")
+
+    st.warning(
+        "This is a planning calculator only. It does not calculate your official tax bill and is not tax advice."
+    )
+
+    income_records = load_income_records()
+    expense_records = load_expense_records()
+
+    if income_records.empty and expense_records.empty:
+        st.warning("No income or expense records yet. Add records first to calculate a set-aside amount.")
+    else:
+        if not income_records.empty:
+            income_records = add_tax_year_column(income_records)
+            income_records["net_income"] = pd.to_numeric(income_records["net_income"], errors="coerce").fillna(0)
+
+        if not expense_records.empty:
+            expense_records = add_tax_year_column(expense_records)
+            expense_records["amount"] = pd.to_numeric(expense_records["amount"], errors="coerce").fillna(0)
+
+        tax_years = []
+
+        if not income_records.empty:
+            tax_years.extend(income_records["tax_year"].dropna().unique().tolist())
+
+        if not expense_records.empty:
+            tax_years.extend(expense_records["tax_year"].dropna().unique().tolist())
+
+        tax_years = sorted(list(set(tax_years)))
+
+        if "Unknown" in tax_years:
+            tax_years.remove("Unknown")
+            tax_years.append("Unknown")
+
+        selected_tax_year = st.selectbox(
+            "Select tax year",
+            tax_years,
+            key="set_aside_tax_year"
+        )
+
+        selected_income = pd.DataFrame()
+        selected_expenses = pd.DataFrame()
+
+        if not income_records.empty:
+            selected_income = income_records[income_records["tax_year"] == selected_tax_year].copy()
+
+        if not expense_records.empty:
+            selected_expenses = expense_records[expense_records["tax_year"] == selected_tax_year].copy()
+
+        total_income = selected_income["net_income"].sum() if not selected_income.empty else 0
+        total_expenses = selected_expenses["amount"].sum() if not selected_expenses.empty else 0
+        profit = total_income - total_expenses
+
+        st.markdown("### Current tax-year position")
+
+        col1, col2, col3 = st.columns(3)
+
+        col1.metric("Income", f"£{total_income:,.2f}")
+        col2.metric("Expenses", f"£{total_expenses:,.2f}")
+        col3.metric("Profit", f"£{profit:,.2f}")
+
+        st.markdown("### Set-aside settings")
+
+        set_aside_percentage = st.slider(
+            "Percentage of profit to set aside",
+            min_value=0,
+            max_value=50,
+            value=25,
+            step=1
+        )
+
+        already_reserved = st.number_input(
+            "Amount already reserved (£)",
+            min_value=0.0,
+            step=10.0,
+            value=0.0
+        )
+
+        if profit <= 0:
+            suggested_set_aside = 0
+        else:
+            suggested_set_aside = profit * (set_aside_percentage / 100)
+
+        remaining_to_reserve = max(suggested_set_aside - already_reserved, 0)
+
+        st.markdown("### Suggested reserve")
+
+        col4, col5, col6 = st.columns(3)
+
+        col4.metric("Set-aside percentage", f"{set_aside_percentage}%")
+        col5.metric("Suggested reserve", f"£{suggested_set_aside:,.2f}")
+        col6.metric("Still to reserve", f"£{remaining_to_reserve:,.2f}")
+
+        if profit <= 0:
+            st.info("Your selected tax-year profit is zero or negative, so this calculator suggests no set-aside yet.")
+        elif already_reserved >= suggested_set_aside:
+            st.success("You have reserved enough based on this chosen percentage.")
+        else:
+            st.warning(f"You may want to reserve another £{remaining_to_reserve:,.2f} based on your chosen percentage.")
+
+        st.markdown("### Reserve plan")
+
+        weekly_reserve = remaining_to_reserve / 4 if remaining_to_reserve > 0 else 0
+        monthly_reserve = remaining_to_reserve
+
+        col7, col8 = st.columns(2)
+
+        col7.metric("Reserve over 4 weeks", f"£{weekly_reserve:,.2f}/week")
+        col8.metric("Reserve this month", f"£{monthly_reserve:,.2f}")
+
+        st.markdown("### Side-hustle contribution")
+
+        if selected_income.empty:
+            st.warning("No income records found for this tax year.")
+        else:
+            income_by_stream = selected_income.groupby("income_stream", as_index=False)["net_income"].sum()
+            income_by_stream = income_by_stream.rename(
+                columns={
+                    "income_stream": "Side Hustle",
+                    "net_income": "Net Income",
+                }
+            )
+
+            income_by_stream["Suggested Set-Aside"] = income_by_stream["Net Income"] * (set_aside_percentage / 100)
+            income_by_stream = income_by_stream.sort_values("Net Income", ascending=False)
+
+            st.dataframe(income_by_stream, use_container_width=True)
+
+        st.markdown("### Download set-aside summary")
+
+        summary_df = pd.DataFrame(
+            [
+                {
+                    "Tax Year": selected_tax_year,
+                    "Total Income": total_income,
+                    "Total Expenses": total_expenses,
+                    "Profit": profit,
+                    "Set Aside Percentage": set_aside_percentage,
+                    "Suggested Reserve": suggested_set_aside,
+                    "Already Reserved": already_reserved,
+                    "Remaining To Reserve": remaining_to_reserve,
+                    "Weekly Reserve Over 4 Weeks": weekly_reserve,
+                }
+            ]
+        )
+
+        st.download_button(
+            "Download set-aside summary CSV",
+            data=summary_df.to_csv(index=False).encode("utf-8"),
+            file_name=f"hustlehq_tax_set_aside_{selected_tax_year.replace('/', '_')}.csv",
+            mime="text/csv",
+        )
+
+    st.markdown("---")
+
+    st.markdown("### How to use this page")
+
+    st.write("- Use this as a conservative planning tool.")
+    st.write("- Choose your own set-aside percentage.")
+    st.write("- Keep the reserved money separate from spending money.")
+    st.write("- Check HMRC guidance or speak to a tax professional before filing anything.")
+    st.write("- Use Tax-Year Summary and HMRC Export for fuller record checking.")
 
 
 
