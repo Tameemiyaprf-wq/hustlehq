@@ -496,6 +496,7 @@ page = st.sidebar.radio(
         "Project Tracker",
         "Invoice Draft",
         "Invoice History",
+        "Payment Chase",
         "Evidence Centre",
         "HMRC Export",
         "Weekly Review",
@@ -2241,6 +2242,171 @@ elif page == "Invoice History":
     st.write("- Mark invoices as Sent, Awaiting payment, Paid, Overdue or Cancelled.")
     st.write("- When an invoice is paid, also add the payment on the Add Income page.")
     st.write("- Use this page to track money you are owed.")
+
+
+
+elif page == "Payment Chase":
+    st.title("Payment Chase")
+    st.subheader("Create professional follow-up messages for unpaid invoices")
+
+    invoice_records = load_invoice_records()
+
+    if invoice_records.empty:
+        st.warning("No invoices saved yet. Create and save invoices first.")
+    else:
+        invoice_records["amount"] = pd.to_numeric(invoice_records["amount"], errors="coerce").fillna(0)
+
+        unpaid_statuses = ["Draft", "Sent", "Awaiting payment", "Overdue"]
+        unpaid_invoices = invoice_records[invoice_records["status"].isin(unpaid_statuses)].copy()
+
+        if unpaid_invoices.empty:
+            st.success("No unpaid invoices found.")
+        else:
+            st.markdown("### Choose unpaid invoice")
+
+            invoice_options = [
+                f"{index} - {row['invoice_number']} - {row['client_name']} - £{row['amount']:,.2f} - {row['status']}"
+                for index, row in unpaid_invoices.iterrows()
+            ]
+
+            selected_invoice = st.selectbox(
+                "Invoice to chase",
+                invoice_options
+            )
+
+            selected_index = int(selected_invoice.split(" - ")[0])
+            invoice = invoice_records.loc[selected_index]
+
+            invoice_number = invoice["invoice_number"]
+            client_name = invoice["client_name"]
+            client_email = invoice["client_email"]
+            amount = float(invoice["amount"])
+            due_date = invoice["due_date"]
+            service_description = invoice["service_description"]
+            status = invoice["status"]
+
+            col1, col2, col3 = st.columns(3)
+
+            col1.metric("Invoice", invoice_number)
+            col2.metric("Amount", f"£{amount:,.2f}")
+            col3.metric("Status", status)
+
+            st.write(f"**Client:** {client_name}")
+            st.write(f"**Due date:** {due_date}")
+            st.write(f"**Service:** {service_description}")
+
+            st.markdown("### Message type")
+
+            chase_type = st.selectbox(
+                "Choose follow-up style",
+                [
+                    "Polite reminder",
+                    "Overdue reminder",
+                    "Final firm reminder",
+                ]
+            )
+
+            your_name = st.text_input(
+                "Sign-off name",
+                value="Tami"
+            )
+
+            if chase_type == "Polite reminder":
+                subject = f"Reminder: Invoice {invoice_number}"
+                message = f"""Hi {client_name},
+
+I hope you're well.
+
+Just a quick reminder that invoice {invoice_number} for £{amount:,.2f} is due on {due_date}.
+
+This relates to:
+{service_description}
+
+Please let me know once payment has been made, or if you need anything else from me.
+
+Kind regards,
+{your_name}
+"""
+
+            elif chase_type == "Overdue reminder":
+                subject = f"Overdue invoice: {invoice_number}"
+                message = f"""Hi {client_name},
+
+I hope you're well.
+
+I'm following up because invoice {invoice_number} for £{amount:,.2f} appears to now be overdue.
+
+This relates to:
+{service_description}
+
+Please could you confirm when payment will be made?
+
+Kind regards,
+{your_name}
+"""
+
+            else:
+                subject = f"Final payment reminder: Invoice {invoice_number}"
+                message = f"""Hi {client_name},
+
+I hope you're well.
+
+I'm following up again regarding invoice {invoice_number} for £{amount:,.2f}, which remains unpaid.
+
+This relates to:
+{service_description}
+
+Please arrange payment as soon as possible or confirm the expected payment date.
+
+Kind regards,
+{your_name}
+"""
+
+            st.markdown("### Subject line")
+
+            st.text_input(
+                "Copy subject",
+                value=subject
+            )
+
+            st.markdown("### Message")
+
+            st.text_area(
+                "Copy message",
+                value=message,
+                height=320
+            )
+
+            st.download_button(
+                "Download chase message as text file",
+                data=message.encode("utf-8"),
+                file_name=f"{invoice_number}_payment_chase.txt",
+                mime="text/plain",
+            )
+
+            st.markdown("### Update invoice status after chasing")
+
+            if st.button("Mark selected invoice as Awaiting payment"):
+                invoice_records.loc[selected_index, "status"] = "Awaiting payment"
+                save_invoice_records(invoice_records)
+                st.success("Invoice marked as Awaiting payment.")
+                st.rerun()
+
+            if st.button("Mark selected invoice as Overdue"):
+                invoice_records.loc[selected_index, "status"] = "Overdue"
+                save_invoice_records(invoice_records)
+                st.success("Invoice marked as Overdue.")
+                st.rerun()
+
+    st.markdown("---")
+
+    st.markdown("### How to use this page")
+
+    st.write("- Use this page after saving invoices in Invoice History.")
+    st.write("- Start with a polite reminder if the due date is close.")
+    st.write("- Use overdue reminders only when payment is late.")
+    st.write("- Keep the tone professional and factual.")
+    st.write("- When payment arrives, update the invoice to Paid and add the income on Add Income.")
 
 
 
