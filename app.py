@@ -135,6 +135,7 @@ GOALS_FILE = DATA_FOLDER / "goals.json"
 APP_SETTINGS_FILE = DATA_FOLDER / "app_settings.json"
 PROJECT_FILE = DATA_FOLDER / "project_records.csv"
 INVOICE_FILE = DATA_FOLDER / "invoice_records.csv"
+RECURRING_EXPENSE_FILE = DATA_FOLDER / "recurring_expense_records.csv"
 
 
 def load_income_records():
@@ -471,6 +472,52 @@ def add_tax_year_column(records):
 
 
 
+def load_recurring_expense_records():
+    columns = [
+        "date_added",
+        "expense_name",
+        "expense_category",
+        "amount",
+        "frequency",
+        "next_due_date",
+        "status",
+        "notes",
+    ]
+
+    if RECURRING_EXPENSE_FILE.exists():
+        records = pd.read_csv(RECURRING_EXPENSE_FILE)
+
+        for column in columns:
+            if column not in records.columns:
+                records[column] = ""
+
+        records["amount"] = pd.to_numeric(records["amount"], errors="coerce").fillna(0)
+
+        return records[columns]
+
+    return pd.DataFrame(columns=columns)
+
+
+def save_recurring_expense_records(records):
+    records.to_csv(RECURRING_EXPENSE_FILE, index=False)
+
+
+def estimate_monthly_recurring_cost(amount, frequency):
+    if frequency == "Weekly":
+        return amount * 52 / 12
+    elif frequency == "Fortnightly":
+        return amount * 26 / 12
+    elif frequency == "Monthly":
+        return amount
+    elif frequency == "Quarterly":
+        return amount / 3
+    elif frequency == "Yearly":
+        return amount / 12
+    else:
+        return amount
+
+
+
 def render_sidebar_summary():
     income_records = load_income_records()
     expense_records = load_expense_records()
@@ -524,6 +571,7 @@ page = st.sidebar.radio(
         "Import Income CSV",
         "Add Expense",
         "Import Expense CSV",
+        "Recurring Expenses",
         "Project Tracker",
         "Invoice Draft",
         "Invoice History",
@@ -2999,6 +3047,267 @@ elif page == "Import Expense CSV":
     st.write("- Preview before saving.")
     st.write("- Imported records are added to your main expense records.")
     st.write("- Keep the original receipt, bank export or platform report as evidence.")
+
+
+
+elif page == "Recurring Expenses":
+    st.title("Recurring Expenses")
+    st.subheader("Track regular side-hustle costs and subscriptions")
+
+    recurring_expenses = load_recurring_expense_records()
+
+    st.markdown("### Add recurring expense")
+
+    with st.form("add_recurring_expense_form"):
+        col1, col2 = st.columns(2)
+
+        with col1:
+            expense_name = st.text_input(
+                "Expense name",
+                placeholder="Example: Canva Pro, domain name, phone bill, software subscription"
+            )
+
+            expense_category = st.selectbox(
+                "Expense category",
+                [
+                    "Software",
+                    "Subscriptions",
+                    "Postage",
+                    "Packaging",
+                    "Platform Fees",
+                    "Equipment",
+                    "Travel",
+                    "Marketing",
+                    "Stock/Inventory",
+                    "Phone/Internet",
+                    "Other",
+                ]
+            )
+
+            amount = st.number_input(
+                "Amount (£)",
+                min_value=0.0,
+                step=1.0,
+                value=0.0
+            )
+
+        with col2:
+            frequency = st.selectbox(
+                "Frequency",
+                [
+                    "Weekly",
+                    "Fortnightly",
+                    "Monthly",
+                    "Quarterly",
+                    "Yearly",
+                    "One-off reminder",
+                ]
+            )
+
+            next_due_date = st.date_input("Next due date")
+
+            status = st.selectbox(
+                "Status",
+                [
+                    "Active",
+                    "Paused",
+                    "Cancelled",
+                ]
+            )
+
+        notes = st.text_area("Notes")
+
+        submitted = st.form_submit_button("Save recurring expense")
+
+    if submitted:
+        if not expense_name.strip():
+            st.error("Add an expense name before saving.")
+        elif amount <= 0:
+            st.error("Add an amount above £0.")
+        else:
+            new_recurring_expense = pd.DataFrame(
+                [
+                    {
+                        "date_added": str(pd.Timestamp.today().date()),
+                        "expense_name": expense_name.strip(),
+                        "expense_category": expense_category,
+                        "amount": amount,
+                        "frequency": frequency,
+                        "next_due_date": str(next_due_date),
+                        "status": status,
+                        "notes": notes.strip(),
+                    }
+                ]
+            )
+
+            recurring_expenses = pd.concat(
+                [recurring_expenses, new_recurring_expense],
+                ignore_index=True
+            )
+
+            save_recurring_expense_records(recurring_expenses)
+
+            st.success("Recurring expense saved successfully.")
+            st.rerun()
+
+    st.markdown("---")
+
+    st.markdown("### Recurring expense overview")
+
+    if recurring_expenses.empty:
+        st.warning("No recurring expenses saved yet.")
+    else:
+        recurring_expenses["amount"] = pd.to_numeric(
+            recurring_expenses["amount"],
+            errors="coerce"
+        ).fillna(0)
+
+        active_expenses = recurring_expenses[
+            recurring_expenses["status"] == "Active"
+        ].copy()
+
+        if not active_expenses.empty:
+            active_expenses["estimated_monthly_cost"] = active_expenses.apply(
+                lambda row: estimate_monthly_recurring_cost(row["amount"], row["frequency"]),
+                axis=1
+            )
+        else:
+            active_expenses["estimated_monthly_cost"] = []
+
+        estimated_monthly_total = active_expenses["estimated_monthly_cost"].sum() if not active_expenses.empty else 0
+        estimated_yearly_total = estimated_monthly_total * 12
+
+        next_due_dates = pd.to_datetime(active_expenses["next_due_date"], errors="coerce") if not active_expenses.empty else pd.Series(dtype="datetime64[ns]")
+        today = pd.Timestamp.today().normalize()
+        due_soon_count = int(((next_due_dates >= today) & (next_due_dates <= today + pd.Timedelta(days=7))).sum()) if not active_expenses.empty else 0
+        overdue_count = int((next_due_dates < today).sum()) if not active_expenses.empty else 0
+
+        col1, col2, col3, col4 = st.columns(4)
+
+        col1.metric("Recurring expenses", len(recurring_expenses))
+        col2.metric("Active expenses", len(active_expenses))
+        col3.metric("Est. monthly cost", f"£{estimated_monthly_total:,.2f}")
+        col4.metric("Est. yearly cost", f"£{estimated_yearly_total:,.2f}")
+
+        alert1, alert2 = st.columns(2)
+
+        if due_soon_count > 0:
+            alert1.warning(f"{due_soon_count} active recurring expense(s) due within 7 days.")
+        else:
+            alert1.success("No active recurring expenses due within 7 days.")
+
+        if overdue_count > 0:
+            alert2.error(f"{overdue_count} active recurring expense(s) appear overdue.")
+        else:
+            alert2.success("No active recurring expenses appear overdue.")
+
+        st.markdown("### Filter recurring expenses")
+
+        status_filter = st.selectbox(
+            "Filter by status",
+            ["All"] + sorted(recurring_expenses["status"].dropna().unique().tolist())
+        )
+
+        category_filter = st.selectbox(
+            "Filter by category",
+            ["All"] + sorted(recurring_expenses["expense_category"].dropna().unique().tolist())
+        )
+
+        filtered_expenses = recurring_expenses.copy()
+
+        if status_filter != "All":
+            filtered_expenses = filtered_expenses[filtered_expenses["status"] == status_filter]
+
+        if category_filter != "All":
+            filtered_expenses = filtered_expenses[filtered_expenses["expense_category"] == category_filter]
+
+        display_expenses = filtered_expenses.copy()
+
+        display_expenses["amount"] = pd.to_numeric(
+            display_expenses["amount"],
+            errors="coerce"
+        ).fillna(0)
+
+        display_expenses["estimated_monthly_cost"] = display_expenses.apply(
+            lambda row: estimate_monthly_recurring_cost(row["amount"], row["frequency"]),
+            axis=1
+        )
+
+        st.dataframe(display_expenses, use_container_width=True)
+
+        st.download_button(
+            "Download recurring expenses CSV",
+            data=recurring_expenses.to_csv(index=False).encode("utf-8"),
+            file_name="hustlehq_recurring_expenses.csv",
+            mime="text/csv",
+        )
+
+        st.markdown("### Convert recurring expense to actual expense")
+
+        convert_options = [
+            f"{index} - {row['expense_name']} - £{float(row['amount']):,.2f} ({row['frequency']})"
+            for index, row in recurring_expenses.iterrows()
+        ]
+
+        selected_convert = st.selectbox(
+            "Choose recurring expense to log now",
+            convert_options,
+            key="recurring_expense_convert_select"
+        )
+
+        if st.button("Log selected recurring expense as actual expense"):
+            selected_index = int(selected_convert.split(" - ")[0])
+            selected_row = recurring_expenses.loc[selected_index]
+
+            expense_records = load_expense_records()
+
+            new_expense = pd.DataFrame(
+                [
+                    {
+                        "date": str(pd.Timestamp.today().date()),
+                        "expense_category": selected_row["expense_category"],
+                        "description": f"Recurring expense: {selected_row['expense_name']}",
+                        "amount": float(selected_row["amount"]),
+                        "receipt": f"Recurring expense log | {selected_row['expense_name']}",
+                    }
+                ]
+            )
+
+            expense_records = pd.concat([expense_records, new_expense], ignore_index=True)
+            save_expense_records(expense_records)
+
+            st.success("Recurring expense logged as an actual expense.")
+            st.info("Go to Dashboard or Add Expense to review it.")
+
+        st.markdown("### Delete recurring expense")
+
+        delete_options = [
+            f"{index} - {row['expense_name']} ({row['status']})"
+            for index, row in recurring_expenses.iterrows()
+        ]
+
+        selected_delete = st.selectbox(
+            "Choose recurring expense to delete",
+            delete_options,
+            key="delete_recurring_expense_select"
+        )
+
+        if st.button("Delete selected recurring expense"):
+            selected_index = int(selected_delete.split(" - ")[0])
+            recurring_expenses = recurring_expenses.drop(index=selected_index).reset_index(drop=True)
+            save_recurring_expense_records(recurring_expenses)
+
+            st.success("Recurring expense deleted.")
+            st.rerun()
+
+    st.markdown("---")
+
+    st.markdown("### How to use this page")
+
+    st.write("- Add regular costs like Canva, domains, subscriptions, packaging suppliers or software.")
+    st.write("- Use monthly and yearly estimates to see how much your side hustles really cost.")
+    st.write("- Convert a recurring expense into an actual expense when it is paid.")
+    st.write("- Keep cancelled expenses recorded if you want history, or delete them if not needed.")
 
 
 
