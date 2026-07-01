@@ -442,6 +442,35 @@ def save_invoice_records(records):
 
 
 
+def get_uk_tax_year(date_value):
+    date_value = pd.to_datetime(date_value, errors="coerce")
+
+    if pd.isna(date_value):
+        return "Unknown"
+
+    year = date_value.year
+    tax_year_start = pd.Timestamp(year=year, month=4, day=6)
+
+    if date_value >= tax_year_start:
+        return f"{year}/{str(year + 1)[-2:]}"
+    else:
+        return f"{year - 1}/{str(year)[-2:]}"
+
+
+def add_tax_year_column(records):
+    records = records.copy()
+
+    if "date" not in records.columns:
+        records["tax_year"] = "Unknown"
+        return records
+
+    records["date"] = pd.to_datetime(records["date"], errors="coerce")
+    records["tax_year"] = records["date"].apply(get_uk_tax_year)
+
+    return records
+
+
+
 def render_sidebar_summary():
     income_records = load_income_records()
     expense_records = load_expense_records()
@@ -497,8 +526,10 @@ page = st.sidebar.radio(
         "Invoice Draft",
         "Invoice History",
         "Payment Chase",
+        "Convert Invoice to Income",
         "Evidence Centre",
         "HMRC Export",
+        "Tax-Year Summary",
         "Weekly Review",
         "Monthly Insights",
         "Data Backup",
@@ -2410,6 +2441,118 @@ Kind regards,
 
 
 
+elif page == "Convert Invoice to Income":
+    st.title("Convert Invoice to Income")
+    st.subheader("Turn paid invoices into income records without retyping everything")
+
+    invoice_records = load_invoice_records()
+    income_records = load_income_records()
+
+    if invoice_records.empty:
+        st.warning("No invoices saved yet. Create and save invoices first.")
+    else:
+        invoice_records["amount"] = pd.to_numeric(invoice_records["amount"], errors="coerce").fillna(0)
+
+        paid_invoices = invoice_records[invoice_records["status"] == "Paid"].copy()
+
+        if paid_invoices.empty:
+            st.warning("No paid invoices found yet. Mark an invoice as Paid in Invoice History first.")
+        else:
+            st.markdown("### Choose paid invoice")
+
+            invoice_options = [
+                f"{index} - {row['invoice_number']} - {row['client_name']} - £{row['amount']:,.2f}"
+                for index, row in paid_invoices.iterrows()
+            ]
+
+            selected_invoice = st.selectbox(
+                "Paid invoice to convert",
+                invoice_options
+            )
+
+            selected_index = int(selected_invoice.split(" - ")[0])
+            invoice = invoice_records.loc[selected_index]
+
+            invoice_number = str(invoice["invoice_number"])
+            client_name = str(invoice["client_name"])
+            side_hustle = str(invoice["side_hustle"])
+            amount = float(invoice["amount"])
+            service_description = str(invoice["service_description"])
+            payment_notes = str(invoice["payment_notes"])
+            invoice_date = str(invoice["invoice_date"])
+
+            st.markdown("### Invoice selected")
+
+            col1, col2, col3 = st.columns(3)
+
+            col1.metric("Invoice", invoice_number)
+            col2.metric("Client", client_name)
+            col3.metric("Amount", f"£{amount:,.2f}")
+
+            st.write(f"**Side hustle:** {side_hustle}")
+            st.write(f"**Service:** {service_description}")
+
+            st.markdown("### Income record details")
+
+            income_date = st.date_input("Income received date")
+
+            platform_fee = st.number_input(
+                "Platform/payment fee (£)",
+                min_value=0.0,
+                step=1.0,
+                value=0.0
+            )
+
+            evidence_note = st.text_input(
+                "Evidence note",
+                value=f"Invoice {invoice_number} paid by {client_name}"
+            )
+
+            duplicate_found = False
+
+            if not income_records.empty and "evidence" in income_records.columns:
+                duplicate_found = income_records["evidence"].astype(str).str.contains(invoice_number, case=False, na=False).any()
+
+            if duplicate_found:
+                st.warning("This invoice number already appears in your income evidence. Check before converting again.")
+
+            if st.button("Convert selected invoice to income"):
+                gross_income = amount
+                net_income = gross_income - platform_fee
+
+                new_income = pd.DataFrame(
+                    [
+                        {
+                            "date": str(income_date),
+                            "income_stream": side_hustle,
+                            "description": f"Invoice payment from {client_name}: {service_description}",
+                            "gross_income": gross_income,
+                            "platform_fee": platform_fee,
+                            "net_income": net_income,
+                            "payment_status": "Paid",
+                            "evidence": evidence_note,
+                        }
+                    ]
+                )
+
+                income_records = pd.concat([income_records, new_income], ignore_index=True)
+                save_income_records(income_records)
+
+                st.success("Invoice converted to income successfully.")
+                st.info("Go to Dashboard or Add Income to review the new income record.")
+
+    st.markdown("---")
+
+    st.markdown("### How to use this page")
+
+    st.write("- First create an invoice on Invoice Draft.")
+    st.write("- Save it to Invoice History.")
+    st.write("- Mark it as Paid once payment arrives.")
+    st.write("- Then use this page to create the income record automatically.")
+    st.write("- After conversion, the income will appear on your Dashboard and exports.")
+
+
+
 elif page == "Evidence Centre":
     st.title("Evidence Centre")
     st.subheader("Review missing evidence, unpaid income and records that need attention")
@@ -2841,6 +2984,199 @@ elif page == "HMRC Export":
 
     if tax_year != "All records":
         st.info("UK tax years usually run from 6 April to 5 April. This app filters using that date range.")
+elif page == "Tax-Year Summary":
+    st.title("Tax-Year Summary")
+    st.subheader("Review income, expenses and profit by UK tax year")
+
+    st.warning(
+        "This page helps organise your records by UK tax year. It does not calculate your official tax bill and is not tax advice."
+    )
+
+    income_records = load_income_records()
+    expense_records = load_expense_records()
+
+    if income_records.empty and expense_records.empty:
+        st.warning("No income or expense records yet. Add records first to generate a tax-year summary.")
+    else:
+        if not income_records.empty:
+            income_records = add_tax_year_column(income_records)
+            income_records["net_income"] = pd.to_numeric(income_records["net_income"], errors="coerce").fillna(0)
+
+        if not expense_records.empty:
+            expense_records = add_tax_year_column(expense_records)
+            expense_records["amount"] = pd.to_numeric(expense_records["amount"], errors="coerce").fillna(0)
+
+        tax_years = []
+
+        if not income_records.empty:
+            tax_years.extend(income_records["tax_year"].dropna().unique().tolist())
+
+        if not expense_records.empty:
+            tax_years.extend(expense_records["tax_year"].dropna().unique().tolist())
+
+        tax_years = sorted(list(set(tax_years)))
+
+        if "Unknown" in tax_years:
+            tax_years.remove("Unknown")
+            tax_years.append("Unknown")
+
+        selected_tax_year = st.selectbox(
+            "Select tax year",
+            tax_years
+        )
+
+        selected_income = pd.DataFrame()
+        selected_expenses = pd.DataFrame()
+
+        if not income_records.empty:
+            selected_income = income_records[income_records["tax_year"] == selected_tax_year].copy()
+
+        if not expense_records.empty:
+            selected_expenses = expense_records[expense_records["tax_year"] == selected_tax_year].copy()
+
+        total_income = selected_income["net_income"].sum() if not selected_income.empty else 0
+        total_expenses = selected_expenses["amount"].sum() if not selected_expenses.empty else 0
+        profit = total_income - total_expenses
+
+        st.markdown("### Selected tax-year summary")
+
+        col1, col2, col3, col4 = st.columns(4)
+
+        col1.metric("Tax year", selected_tax_year)
+        col2.metric("Income", f"£{total_income:,.2f}")
+        col3.metric("Expenses", f"£{total_expenses:,.2f}")
+        col4.metric("Profit", f"£{profit:,.2f}")
+
+        st.markdown("### Trading allowance reference")
+
+        trading_allowance = 1000
+
+        if total_income <= trading_allowance:
+            st.info(
+                f"Recorded income for this tax year is £{total_income:,.2f}, which is at or below the £1,000 trading allowance reference point."
+            )
+        else:
+            excess = total_income - trading_allowance
+            st.warning(
+                f"Recorded income is £{total_income:,.2f}, which is £{excess:,.2f} above the £1,000 trading allowance reference point. "
+                "Check HMRC guidance or speak to a tax professional if unsure."
+            )
+
+        st.markdown("### Income by side hustle")
+
+        if selected_income.empty:
+            st.warning("No income records found for this tax year.")
+        else:
+            income_by_stream = selected_income.groupby("income_stream", as_index=False)["net_income"].sum()
+            income_by_stream = income_by_stream.rename(
+                columns={
+                    "income_stream": "Side Hustle",
+                    "net_income": "Net Income",
+                }
+            )
+            income_by_stream = income_by_stream.sort_values("Net Income", ascending=False)
+
+            st.dataframe(income_by_stream, use_container_width=True)
+            st.bar_chart(income_by_stream.set_index("Side Hustle")["Net Income"])
+
+        st.markdown("### Expenses by category/description")
+
+        if selected_expenses.empty:
+            st.warning("No expense records found for this tax year.")
+        else:
+            if "expense_category" in selected_expenses.columns:
+                expense_group_column = "expense_category"
+            elif "category" in selected_expenses.columns:
+                expense_group_column = "category"
+            else:
+                expense_group_column = "description"
+
+            expenses_by_group = selected_expenses.groupby(expense_group_column, as_index=False)["amount"].sum()
+            expenses_by_group = expenses_by_group.rename(
+                columns={
+                    expense_group_column: "Expense Group",
+                    "amount": "Amount",
+                }
+            )
+            expenses_by_group = expenses_by_group.sort_values("Amount", ascending=False)
+
+            st.dataframe(expenses_by_group, use_container_width=True)
+            st.bar_chart(expenses_by_group.set_index("Expense Group")["Amount"])
+
+        st.markdown("### Full tax-year record tables")
+
+        with st.expander("View income records for selected tax year"):
+            if selected_income.empty:
+                st.write("No income records.")
+            else:
+                st.dataframe(selected_income, use_container_width=True)
+
+        with st.expander("View expense records for selected tax year"):
+            if selected_expenses.empty:
+                st.write("No expense records.")
+            else:
+                st.dataframe(selected_expenses, use_container_width=True)
+
+        st.markdown("### Download tax-year summary")
+
+        summary_rows = [
+            {
+                "Tax Year": selected_tax_year,
+                "Total Income": total_income,
+                "Total Expenses": total_expenses,
+                "Profit": profit,
+                "Trading Allowance Reference": trading_allowance,
+                "Income Above Trading Allowance Reference": max(total_income - trading_allowance, 0),
+            }
+        ]
+
+        tax_year_summary_df = pd.DataFrame(summary_rows)
+
+        st.download_button(
+            "Download selected tax-year summary CSV",
+            data=tax_year_summary_df.to_csv(index=False).encode("utf-8"),
+            file_name=f"hustlehq_tax_year_summary_{selected_tax_year.replace('/', '_')}.csv",
+            mime="text/csv",
+        )
+
+        st.markdown("### Record quality checks")
+
+        missing_income_evidence = 0
+        missing_expense_receipts = 0
+
+        if not selected_income.empty and "evidence" in selected_income.columns:
+            missing_income_evidence = selected_income["evidence"].astype(str).str.strip().isin(["", "nan", "None"]).sum()
+
+        if not selected_expenses.empty:
+            if "receipt" in selected_expenses.columns:
+                missing_expense_receipts = selected_expenses["receipt"].astype(str).str.strip().isin(["", "nan", "None"]).sum()
+            elif "evidence" in selected_expenses.columns:
+                missing_expense_receipts = selected_expenses["evidence"].astype(str).str.strip().isin(["", "nan", "None"]).sum()
+
+        check1, check2 = st.columns(2)
+
+        if missing_income_evidence == 0:
+            check1.success("Income evidence check: no missing evidence detected.")
+        else:
+            check1.warning(f"Income evidence check: {missing_income_evidence} record(s) may be missing evidence.")
+
+        if missing_expense_receipts == 0:
+            check2.success("Expense receipt check: no missing receipts detected.")
+        else:
+            check2.warning(f"Expense receipt check: {missing_expense_receipts} record(s) may be missing receipt/evidence details.")
+
+    st.markdown("---")
+
+    st.markdown("### How to use this page")
+
+    st.write("- Use this page to review income and expenses by UK tax year.")
+    st.write("- Download the tax-year summary CSV before doing self-assessment prep.")
+    st.write("- Keep receipts, invoices, platform statements and bank evidence.")
+    st.write("- Use HMRC Export for the fuller record pack.")
+    st.write("- This page is for organisation, not official tax filing.")
+
+
+
 elif page == "Weekly Review":
     st.title("Weekly Review")
     st.subheader("Review what made money, what cost money and what is worth focusing on next")
