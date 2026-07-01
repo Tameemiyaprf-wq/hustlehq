@@ -521,6 +521,7 @@ page = st.sidebar.radio(
     [
         "Dashboard",
         "Add Income",
+        "Import Income CSV",
         "Add Expense",
         "Project Tracker",
         "Invoice Draft",
@@ -1500,6 +1501,241 @@ elif page == "Add Income":
 
                 st.success("Income record deleted successfully.")
                 st.rerun()
+
+
+elif page == "Import Income CSV":
+    st.title("Import Income CSV")
+    st.subheader("Upload income records from a CSV file")
+
+    st.warning(
+        "Use this page to import income records from platform exports, bank CSVs or manual spreadsheets. "
+        "Always check the preview before saving imported records."
+    )
+
+    uploaded_file = st.file_uploader(
+        "Upload CSV file",
+        type=["csv"],
+        key="income_csv_upload"
+    )
+
+    if uploaded_file is None:
+        st.info("Upload a CSV file to begin.")
+    else:
+        try:
+            imported_df = pd.read_csv(uploaded_file)
+
+            if imported_df.empty:
+                st.error("The uploaded CSV is empty.")
+            else:
+                st.markdown("### Uploaded file preview")
+                st.dataframe(imported_df.head(20), use_container_width=True)
+
+                st.markdown("### Map your columns")
+
+                csv_columns = imported_df.columns.tolist()
+                none_option = "None"
+
+                def guess_column(possible_names):
+                    for possible_name in possible_names:
+                        for column in csv_columns:
+                            if possible_name.lower() in column.lower():
+                                return column
+                    return csv_columns[0] if csv_columns else none_option
+
+                date_column = st.selectbox(
+                    "Date column",
+                    csv_columns,
+                    index=csv_columns.index(guess_column(["date", "sold", "payment"])) if guess_column(["date", "sold", "payment"]) in csv_columns else 0
+                )
+
+                stream_column = st.selectbox(
+                    "Income stream / platform column",
+                    [none_option] + csv_columns,
+                    index=0
+                )
+
+                description_column = st.selectbox(
+                    "Description/item/client column",
+                    [none_option] + csv_columns,
+                    index=([none_option] + csv_columns).index(guess_column(["description", "item", "title", "client", "service"])) if guess_column(["description", "item", "title", "client", "service"]) in csv_columns else 0
+                )
+
+                gross_column = st.selectbox(
+                    "Gross income / amount column",
+                    csv_columns,
+                    index=csv_columns.index(guess_column(["gross", "amount", "total", "sale", "price"])) if guess_column(["gross", "amount", "total", "sale", "price"]) in csv_columns else 0
+                )
+
+                fee_column = st.selectbox(
+                    "Fee column",
+                    [none_option] + csv_columns,
+                    index=0
+                )
+
+                status_column = st.selectbox(
+                    "Payment status column",
+                    [none_option] + csv_columns,
+                    index=0
+                )
+
+                evidence_column = st.selectbox(
+                    "Evidence/reference column",
+                    [none_option] + csv_columns,
+                    index=0
+                )
+
+                default_stream = st.selectbox(
+                    "Default income stream if no platform column is used",
+                    [
+                        "Vinted",
+                        "Legal Transcription",
+                        "YouTube",
+                        "Substack",
+                        "Etsy/Digital Products",
+                        "UGC Deals",
+                        "App Sales",
+                        "Website Builds",
+                        "Client Work",
+                        "Other",
+                    ]
+                )
+
+                st.markdown("### Import settings")
+
+                import_status_default = st.selectbox(
+                    "Default payment status",
+                    [
+                        "Paid",
+                        "Pending",
+                        "Unpaid",
+                        "Cancelled",
+                    ]
+                )
+
+                add_import_tag = st.checkbox(
+                    "Add CSV import tag to evidence",
+                    value=True
+                )
+
+                if st.button("Preview converted income records"):
+                    preview_records = imported_df.copy()
+
+                    preview_records["_date"] = pd.to_datetime(preview_records[date_column], errors="coerce")
+                    preview_records["_gross_income"] = pd.to_numeric(preview_records[gross_column], errors="coerce").fillna(0)
+
+                    if fee_column != none_option:
+                        preview_records["_platform_fee"] = pd.to_numeric(preview_records[fee_column], errors="coerce").fillna(0)
+                    else:
+                        preview_records["_platform_fee"] = 0
+
+                    preview_records["_net_income"] = preview_records["_gross_income"] - preview_records["_platform_fee"]
+
+                    if stream_column != none_option:
+                        preview_records["_income_stream"] = preview_records[stream_column].astype(str)
+                    else:
+                        preview_records["_income_stream"] = default_stream
+
+                    if description_column != none_option:
+                        preview_records["_description"] = preview_records[description_column].astype(str)
+                    else:
+                        preview_records["_description"] = "Imported income record"
+
+                    if status_column != none_option:
+                        preview_records["_payment_status"] = preview_records[status_column].astype(str)
+                    else:
+                        preview_records["_payment_status"] = import_status_default
+
+                    if evidence_column != none_option:
+                        preview_records["_evidence"] = preview_records[evidence_column].astype(str)
+                    else:
+                        preview_records["_evidence"] = "Imported from CSV"
+
+                    if add_import_tag:
+                        preview_records["_evidence"] = preview_records["_evidence"] + " | CSV import"
+
+                    converted_records = pd.DataFrame(
+                        {
+                            "date": preview_records["_date"].dt.date.astype(str),
+                            "income_stream": preview_records["_income_stream"],
+                            "description": preview_records["_description"],
+                            "gross_income": preview_records["_gross_income"],
+                            "platform_fee": preview_records["_platform_fee"],
+                            "net_income": preview_records["_net_income"],
+                            "payment_status": preview_records["_payment_status"],
+                            "evidence": preview_records["_evidence"],
+                        }
+                    )
+
+                    converted_records = converted_records[
+                        converted_records["gross_income"] > 0
+                    ].copy()
+
+                    st.session_state["income_import_preview"] = converted_records
+
+                if "income_import_preview" in st.session_state:
+                    converted_records = st.session_state["income_import_preview"]
+
+                    st.markdown("### Converted income preview")
+
+                    if converted_records.empty:
+                        st.error("No valid income records found after conversion. Check your amount column.")
+                    else:
+                        st.dataframe(converted_records, use_container_width=True)
+
+                        total_import_income = converted_records["net_income"].sum()
+
+                        col1, col2 = st.columns(2)
+                        col1.metric("Records ready to import", len(converted_records))
+                        col2.metric("Net income ready to import", f"£{total_import_income:,.2f}")
+
+                        existing_income = load_income_records()
+
+                        duplicate_count = 0
+
+                        if not existing_income.empty and "evidence" in existing_income.columns:
+                            existing_evidence = existing_income["evidence"].astype(str).tolist()
+
+                            for evidence_value in converted_records["evidence"].astype(str).tolist():
+                                if evidence_value in existing_evidence:
+                                    duplicate_count += 1
+
+                        if duplicate_count > 0:
+                            st.warning(f"{duplicate_count} possible duplicate record(s) found based on evidence/reference text.")
+
+                        confirm_import = st.checkbox(
+                            "I have checked the preview and want to save these income records."
+                        )
+
+                        if st.button("Save imported income records"):
+                            if not confirm_import:
+                                st.error("Tick the confirmation box before saving.")
+                            else:
+                                updated_income = pd.concat(
+                                    [existing_income, converted_records],
+                                    ignore_index=True
+                                )
+
+                                save_income_records(updated_income)
+
+                                st.success("Imported income records saved successfully.")
+                                st.info("Go to Dashboard, Add Income or Tax-Year Summary to review the imported records.")
+
+                                del st.session_state["income_import_preview"]
+
+        except Exception as error:
+            st.error("CSV import failed.")
+            st.exception(error)
+
+    st.markdown("---")
+
+    st.markdown("### CSV import tips")
+
+    st.write("- Your CSV should have at least a date column and an amount column.")
+    st.write("- Use the mapping dropdowns to tell HustleHQ which columns mean what.")
+    st.write("- Preview before saving.")
+    st.write("- Imported records are added to your main income records.")
+    st.write("- Keep your original platform export as backup evidence.")
+
 
 
 elif page == "Add Expense":
