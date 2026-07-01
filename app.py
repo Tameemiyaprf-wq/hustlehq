@@ -434,6 +434,7 @@ page = st.sidebar.radio(
         "Data Backup",
         "Restore Backup",
         "PDF Report",
+        "Security Status",
         "Release Notes",
         "Settings",
     ]
@@ -3007,6 +3008,74 @@ elif page == "Data Backup":
     st.info(
         "For now, restoring is manual: put the backup CSV or JSON files back into the data folder. Automatic restore can be added later."
     )
+
+
+elif page == "Security Status":
+    st.title("Security Status")
+    st.subheader("Review HustleHQ access protection and safe usage")
+
+    app_settings = load_app_settings()
+
+    st.markdown("### Current protection status")
+
+    password_enabled = app_settings.get("password_protection", True)
+    session_authenticated = st.session_state.get("authenticated", False)
+
+    col1, col2, col3 = st.columns(3)
+
+    if password_enabled:
+        col1.success("Password protection: ON")
+    else:
+        col1.error("Password protection: OFF")
+
+    if session_authenticated:
+        col2.success("Current session: Logged in")
+    else:
+        col2.warning("Current session: Not logged in")
+
+    if APP_SETTINGS_FILE.exists():
+        col3.success("App settings file: Found")
+    else:
+        col3.warning("App settings file: Missing")
+
+    st.markdown("### Login controls")
+
+    st.write("Use the sidebar **Log out** button when you finish using HustleHQ.")
+
+    if st.button("Log out now", key="security_status_logout_button"):
+        logout_user()
+
+    st.markdown("### Password checklist")
+
+    st.write("- Change the default password from hustlehq123.")
+    st.write("- Do not share your Streamlit app link with people you do not trust.")
+    st.write("- Do not store highly sensitive financial data online until database security is upgraded.")
+    st.write("- Download backups regularly.")
+    st.write("- Use Restore Backup only with ZIP files downloaded from your own HustleHQ app.")
+    st.write("- Keep your GitHub repository private if you do not want others viewing the source code.")
+
+    st.markdown("### Online deployment note")
+
+    st.warning(
+        "This app currently uses local CSV and JSON files for storage. On Streamlit Cloud, this is suitable for demos and light use, "
+        "but it is not the same as a proper encrypted database-backed production app."
+    )
+
+    st.markdown("### Current security level")
+
+    st.info(
+        "Current level: basic password gate. This is better than having the app fully open, but it is not bank-grade authentication."
+    )
+
+    st.markdown("### Recommended future upgrades")
+
+    st.write("- Add proper user accounts")
+    st.write("- Add a database")
+    st.write("- Store passwords securely instead of plain text")
+    st.write("- Add environment secrets")
+    st.write("- Add private user-specific cloud storage")
+    st.write("- Add automatic backup versioning")
+
 
 
 elif page == "Release Notes":
