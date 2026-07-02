@@ -733,6 +733,133 @@ def calculate_transaction_balance_impact(transaction_type, account_type, amount)
 
 
 
+def score_personal_finance_health(
+    remaining_budget,
+    income_actual,
+    spending_actual,
+    total_debt,
+    total_assets,
+    credit_utilisation,
+    active_savings_progress,
+    subscriptions_total,
+):
+    score = 100
+    warnings = []
+    strengths = []
+
+    if income_actual <= 0:
+        score -= 15
+        warnings.append("No personal income is logged for this month.")
+    else:
+        strengths.append("Personal income is logged for this month.")
+
+    if remaining_budget < 0:
+        score -= 20
+        warnings.append("Budget is negative for the selected month.")
+    elif remaining_budget < 50:
+        score -= 10
+        warnings.append("Budget buffer is very low.")
+    else:
+        strengths.append("Budget has a positive buffer.")
+
+    if income_actual > 0:
+        spending_ratio = spending_actual / income_actual
+        if spending_ratio >= 0.9:
+            score -= 15
+            warnings.append("Spending is using most of your logged monthly income.")
+        elif spending_ratio >= 0.7:
+            score -= 8
+            warnings.append("Spending is moderately high compared with income.")
+        else:
+            strengths.append("Spending is controlled compared with income.")
+
+    if credit_utilisation >= 90:
+        score -= 20
+        warnings.append("Credit utilisation is extremely high.")
+    elif credit_utilisation >= 75:
+        score -= 15
+        warnings.append("Credit utilisation is high.")
+    elif credit_utilisation >= 30:
+        score -= 7
+        warnings.append("Credit utilisation is moderate.")
+    elif credit_utilisation > 0:
+        strengths.append("Credit utilisation is in a healthier range.")
+
+    if total_assets > 0:
+        debt_ratio = total_debt / total_assets
+        if debt_ratio >= 1:
+            score -= 15
+            warnings.append("Debt is equal to or higher than tracked assets.")
+        elif debt_ratio >= 0.5:
+            score -= 8
+            warnings.append("Debt is high compared with tracked assets.")
+        else:
+            strengths.append("Debt is lower than tracked assets.")
+
+    if active_savings_progress <= 0:
+        score -= 8
+        warnings.append("No active savings progress is recorded.")
+    elif active_savings_progress < 25:
+        score -= 5
+        warnings.append("Savings progress is still early.")
+    else:
+        strengths.append("Savings goals are making visible progress.")
+
+    if income_actual > 0:
+        subscription_ratio = subscriptions_total / income_actual
+        if subscription_ratio >= 0.2:
+            score -= 10
+            warnings.append("Subscriptions are taking a large share of monthly income.")
+        elif subscription_ratio >= 0.1:
+            score -= 5
+            warnings.append("Subscriptions are noticeable against monthly income.")
+        elif subscriptions_total > 0:
+            strengths.append("Subscription cost is manageable against income.")
+
+    score = max(min(score, 100), 0)
+
+    return score, warnings, strengths
+
+
+def get_health_score_label(score):
+    if score >= 85:
+        return "Strong"
+    if score >= 70:
+        return "Stable"
+    if score >= 50:
+        return "Needs attention"
+    return "High pressure"
+
+
+def build_personal_action_plan(warnings, remaining_budget, credit_utilisation, subscriptions_total, due_soon_count):
+    actions = []
+
+    if remaining_budget < 0:
+        actions.append("Cut or delay non-essential spending this month because the budget is negative.")
+    elif remaining_budget < 50:
+        actions.append("Keep a small spending freeze until the next income/payment arrives.")
+
+    if credit_utilisation >= 75:
+        actions.append("Prioritise reducing credit card balances before adding new spending.")
+    elif credit_utilisation >= 30:
+        actions.append("Avoid increasing credit card balances and plan a fixed repayment.")
+
+    if subscriptions_total > 0:
+        actions.append("Review subscriptions and cancel anything you do not actively use.")
+
+    if due_soon_count > 0:
+        actions.append("Check the account that subscriptions are coming from and make sure money is available.")
+
+    if not actions and not warnings:
+        actions.append("Keep updating balances weekly and save a net worth snapshot monthly.")
+
+    if not actions:
+        actions.append("Update transactions, balances, subscriptions and budget to improve the intelligence score.")
+
+    return actions
+
+
+
 def load_personal_net_worth_history():
     columns = [
         "snapshot_date",
@@ -2017,6 +2144,7 @@ if page == "Personal Finance":
             "Import Transactions CSV",
             "Balance Manager",
             "Net Worth History",
+            "Intelligence",
         ]
     )
 
@@ -4772,6 +4900,449 @@ if page == "Personal Finance":
 
         st.info(
             "Use this at the end of each week or month. It gives you a record of whether your money position is improving."
+        )
+
+
+
+
+    with personal_tabs[13]:
+        st.markdown("### Intelligence")
+        st.subheader("Spending, budget, debt, subscriptions and savings health check")
+
+        account_records_i = load_personal_account_records()
+        subscription_records_i = load_personal_subscription_records()
+        transaction_records_i = load_personal_transaction_records()
+        budget_records_i = load_personal_budget_records()
+        savings_goal_records_i = load_personal_savings_goal_records()
+        net_worth_history_i = load_personal_net_worth_history()
+
+        today = pd.Timestamp.today()
+
+        intel_col1, intel_col2 = st.columns(2)
+
+        with intel_col1:
+            selected_intel_month = st.selectbox(
+                "Month",
+                list(range(1, 13)),
+                index=int(today.month) - 1,
+                format_func=lambda month_number: calendar.month_name[month_number],
+                key="personal_intelligence_month_select",
+            )
+
+        with intel_col2:
+            selected_intel_year = st.number_input(
+                "Year",
+                min_value=2020,
+                max_value=2100,
+                value=int(today.year),
+                step=1,
+                key="personal_intelligence_year_select",
+            )
+
+        st.markdown("---")
+
+        # -------------------------
+        # ACCOUNT / NET WORTH DATA
+        # -------------------------
+
+        net_worth_data_i = calculate_personal_net_worth(account_records_i)
+
+        current_cash_i = float(net_worth_data_i["current_cash"])
+        savings_i = float(net_worth_data_i["savings"])
+        investments_i = float(net_worth_data_i["investments"])
+        total_debt_i = float(net_worth_data_i["debts"])
+        total_assets_i = current_cash_i + savings_i + investments_i
+        net_worth_i = float(net_worth_data_i["net_worth"])
+
+        credit_utilisation_i = 0
+
+        if not account_records_i.empty:
+            accounts_calc = account_records_i.copy()
+            accounts_calc["balance"] = pd.to_numeric(accounts_calc["balance"], errors="coerce").fillna(0)
+            accounts_calc["credit_limit"] = pd.to_numeric(accounts_calc["credit_limit"], errors="coerce").fillna(0)
+
+            credit_cards_i = accounts_calc[
+                accounts_calc["account_type"] == "Credit Card"
+            ].copy()
+
+            total_credit_limit_i = credit_cards_i["credit_limit"].sum() if not credit_cards_i.empty else 0
+            total_credit_used_i = credit_cards_i["balance"].sum() if not credit_cards_i.empty else 0
+
+            if total_credit_limit_i > 0:
+                credit_utilisation_i = (total_credit_used_i / total_credit_limit_i) * 100
+
+        # -------------------------
+        # TRANSACTION DATA
+        # -------------------------
+
+        month_income_i = 0
+        month_spending_i = 0
+        month_transfers_i = 0
+        month_net_i = 0
+        month_transactions_i = pd.DataFrame()
+
+        if not transaction_records_i.empty:
+            transaction_records_i["amount"] = pd.to_numeric(
+                transaction_records_i["amount"],
+                errors="coerce"
+            ).fillna(0)
+
+            transaction_records_i["transaction_date_dt"] = pd.to_datetime(
+                transaction_records_i["transaction_date"],
+                errors="coerce"
+            )
+
+            month_transactions_i = transaction_records_i[
+                (transaction_records_i["transaction_date_dt"].dt.year == int(selected_intel_year))
+                & (transaction_records_i["transaction_date_dt"].dt.month == int(selected_intel_month))
+            ].copy()
+
+            if not month_transactions_i.empty:
+                month_income_i = month_transactions_i[
+                    month_transactions_i["transaction_type"] == "Income"
+                ]["amount"].sum()
+
+                month_spending_i = month_transactions_i[
+                    month_transactions_i["transaction_type"] == "Expense"
+                ]["amount"].sum()
+
+                month_transfers_i = month_transactions_i[
+                    month_transactions_i["transaction_type"] == "Transfer"
+                ]["amount"].sum()
+
+                month_net_i = month_income_i - month_spending_i
+
+        # -------------------------
+        # BUDGET DATA
+        # -------------------------
+
+        selected_budget_i = pd.DataFrame()
+        income_expected_i = 0
+        planned_outgoing_i = 0
+        planned_remaining_i = 0
+        actual_vs_budget_i = 0
+
+        if not budget_records_i.empty:
+            budget_records_i["budget_year"] = pd.to_numeric(
+                budget_records_i["budget_year"],
+                errors="coerce"
+            ).fillna(0).astype(int)
+
+            selected_month_name_i = calendar.month_name[int(selected_intel_month)]
+
+            selected_budget_i = budget_records_i[
+                (budget_records_i["budget_month"] == selected_month_name_i)
+                & (budget_records_i["budget_year"] == int(selected_intel_year))
+            ].copy()
+
+            if not selected_budget_i.empty:
+                latest_budget_i = selected_budget_i.iloc[-1]
+
+                income_expected_i = float(latest_budget_i["income_expected"])
+                planned_outgoing_i = float(latest_budget_i["total_planned_outgoing"])
+                planned_remaining_i = float(latest_budget_i["remaining_money"])
+                actual_vs_budget_i = planned_outgoing_i - month_spending_i
+
+        # -------------------------
+        # SUBSCRIPTION DATA
+        # -------------------------
+
+        subscriptions_total_i = 0
+        due_soon_count_i = 0
+        subscription_pressure_ratio_i = 0
+
+        if not subscription_records_i.empty:
+            sub_calc = subscription_records_i.copy()
+            sub_calc["amount"] = pd.to_numeric(sub_calc["amount"], errors="coerce").fillna(0)
+            sub_calc["next_payment_date_dt"] = pd.to_datetime(sub_calc["next_payment_date"], errors="coerce")
+
+            active_sub_calc = sub_calc[sub_calc["status"] == "Active"].copy()
+
+            month_subs_i = active_sub_calc[
+                (active_sub_calc["next_payment_date_dt"].dt.year == int(selected_intel_year))
+                & (active_sub_calc["next_payment_date_dt"].dt.month == int(selected_intel_month))
+            ].copy()
+
+            subscriptions_total_i = month_subs_i["amount"].sum() if not month_subs_i.empty else 0
+
+            due_soon_i = active_sub_calc[
+                (active_sub_calc["next_payment_date_dt"] >= pd.Timestamp.today().normalize())
+                & (active_sub_calc["next_payment_date_dt"] <= pd.Timestamp.today().normalize() + pd.Timedelta(days=7))
+            ].copy()
+
+            due_soon_count_i = len(due_soon_i)
+
+            if month_income_i > 0:
+                subscription_pressure_ratio_i = subscriptions_total_i / month_income_i * 100
+
+        # -------------------------
+        # SAVINGS GOAL DATA
+        # -------------------------
+
+        active_savings_progress_i = 0
+        active_goal_count_i = 0
+        total_goal_target_i = 0
+        total_goal_saved_i = 0
+        total_goal_remaining_i = 0
+
+        if not savings_goal_records_i.empty:
+            savings_goal_records_i["target_amount"] = pd.to_numeric(
+                savings_goal_records_i["target_amount"],
+                errors="coerce"
+            ).fillna(0)
+
+            savings_goal_records_i["current_amount"] = pd.to_numeric(
+                savings_goal_records_i["current_amount"],
+                errors="coerce"
+            ).fillna(0)
+
+            active_goals_i = savings_goal_records_i[
+                savings_goal_records_i["status"] == "Active"
+            ].copy()
+
+            active_goal_count_i = len(active_goals_i)
+
+            if not active_goals_i.empty:
+                total_goal_target_i = active_goals_i["target_amount"].sum()
+                total_goal_saved_i = active_goals_i["current_amount"].sum()
+                total_goal_remaining_i = max(total_goal_target_i - total_goal_saved_i, 0)
+
+                if total_goal_target_i > 0:
+                    active_savings_progress_i = min((total_goal_saved_i / total_goal_target_i) * 100, 100)
+
+        # -------------------------
+        # HEALTH SCORE
+        # -------------------------
+
+        health_score_i, warnings_i, strengths_i = score_personal_finance_health(
+            remaining_budget=planned_remaining_i,
+            income_actual=month_income_i,
+            spending_actual=month_spending_i,
+            total_debt=total_debt_i,
+            total_assets=total_assets_i,
+            credit_utilisation=credit_utilisation_i,
+            active_savings_progress=active_savings_progress_i,
+            subscriptions_total=subscriptions_total_i,
+        )
+
+        health_label_i = get_health_score_label(health_score_i)
+
+        st.markdown("### Personal finance health score")
+
+        health_col1, health_col2, health_col3, health_col4 = st.columns(4)
+
+        health_col1.metric("Health score", f"{health_score_i}/100")
+        health_col2.metric("Status", health_label_i)
+        health_col3.metric("Monthly net", f"£{month_net_i:,.2f}")
+        health_col4.metric("Net worth", f"£{net_worth_i:,.2f}")
+
+        st.progress(health_score_i / 100)
+
+        if health_score_i >= 85:
+            st.success("Strong month. Your tracked money position looks controlled.")
+        elif health_score_i >= 70:
+            st.success("Stable month. There are a few things to monitor, but no major pressure signs.")
+        elif health_score_i >= 50:
+            st.warning("This month needs attention. Check spending, subscriptions, savings and debt.")
+        else:
+            st.error("High pressure month. Prioritise essentials, debt control and cash buffer.")
+
+        st.markdown("---")
+
+        st.markdown("### Core monthly intelligence")
+
+        core_col1, core_col2, core_col3, core_col4 = st.columns(4)
+
+        core_col1.metric("Income logged", f"£{month_income_i:,.2f}")
+        core_col2.metric("Spending logged", f"£{month_spending_i:,.2f}")
+        core_col3.metric("Subscriptions", f"£{subscriptions_total_i:,.2f}")
+        core_col4.metric("Budget remaining", f"£{planned_remaining_i:,.2f}")
+
+        if selected_budget_i.empty:
+            st.warning("No monthly budget found for this month. Add one in Monthly Budget for stronger insights.")
+        else:
+            st.markdown("### Budget vs actual")
+
+            budget_col1, budget_col2, budget_col3 = st.columns(3)
+
+            budget_col1.metric("Planned outgoing", f"£{planned_outgoing_i:,.2f}")
+            budget_col2.metric("Actual spending logged", f"£{month_spending_i:,.2f}")
+            budget_col3.metric("Under / over planned spending", f"£{actual_vs_budget_i:,.2f}")
+
+            if month_spending_i > planned_outgoing_i:
+                st.error("Actual logged spending is above planned outgoing.")
+            elif month_spending_i > planned_outgoing_i * 0.85:
+                st.warning("Actual logged spending is close to the planned outgoing.")
+            else:
+                st.success("Actual logged spending is below the planned outgoing.")
+
+        st.markdown("---")
+
+        st.markdown("### Debt pressure")
+
+        debt_col1, debt_col2, debt_col3 = st.columns(3)
+
+        debt_col1.metric("Total debt", f"£{total_debt_i:,.2f}")
+        debt_col2.metric("Total assets", f"£{total_assets_i:,.2f}")
+        debt_col3.metric("Credit utilisation", f"{credit_utilisation_i:,.1f}%")
+
+        if credit_utilisation_i >= 75:
+            st.error("Debt pressure is high because credit utilisation is high.")
+        elif credit_utilisation_i >= 30:
+            st.warning("Debt pressure is moderate. Keep repayments consistent.")
+        elif total_debt_i > 0:
+            st.success("Debt pressure is currently manageable.")
+        else:
+            st.success("No tracked debt pressure.")
+
+        st.markdown("### Subscription pressure")
+
+        sub_col1, sub_col2, sub_col3 = st.columns(3)
+
+        sub_col1.metric("Monthly subscriptions", f"£{subscriptions_total_i:,.2f}")
+        sub_col2.metric("Due in 7 days", due_soon_count_i)
+        sub_col3.metric("Subscription income share", f"{subscription_pressure_ratio_i:,.1f}%")
+
+        if subscription_pressure_ratio_i >= 20:
+            st.error("Subscriptions are taking a high share of monthly income.")
+        elif subscription_pressure_ratio_i >= 10:
+            st.warning("Subscriptions are noticeable compared with income.")
+        elif subscriptions_total_i > 0:
+            st.success("Subscription pressure is currently manageable.")
+        else:
+            st.info("No active subscription pressure found for this month.")
+
+        st.markdown("### Savings pressure")
+
+        save_col1, save_col2, save_col3, save_col4 = st.columns(4)
+
+        save_col1.metric("Active goals", active_goal_count_i)
+        save_col2.metric("Goal target", f"£{total_goal_target_i:,.2f}")
+        save_col3.metric("Saved", f"£{total_goal_saved_i:,.2f}")
+        save_col4.metric("Progress", f"{active_savings_progress_i:,.1f}%")
+
+        if active_goal_count_i == 0:
+            st.warning("No active savings goals found.")
+        elif active_savings_progress_i < 25:
+            st.warning("Savings goals are still early. Keep contributions realistic and consistent.")
+        else:
+            st.success("Savings goals are showing visible progress.")
+
+        st.markdown("---")
+
+        st.markdown("### Spending insights")
+
+        if month_transactions_i.empty:
+            st.warning("No personal transactions found for this month.")
+        else:
+            expense_transactions_i = month_transactions_i[
+                month_transactions_i["transaction_type"] == "Expense"
+            ].copy()
+
+            if expense_transactions_i.empty:
+                st.info("No expense transactions found for this month.")
+            else:
+                spending_by_category_i = (
+                    expense_transactions_i
+                    .groupby("category", as_index=False)["amount"]
+                    .sum()
+                    .sort_values("amount", ascending=False)
+                )
+
+                spending_by_account_i = (
+                    expense_transactions_i
+                    .groupby("account", as_index=False)["amount"]
+                    .sum()
+                    .sort_values("amount", ascending=False)
+                )
+
+                insight_col1, insight_col2 = st.columns(2)
+
+                with insight_col1:
+                    st.markdown("#### Top spending categories")
+                    st.dataframe(spending_by_category_i.head(10), use_container_width=True)
+
+                with insight_col2:
+                    st.markdown("#### Top spending accounts")
+                    st.dataframe(spending_by_account_i.head(10), use_container_width=True)
+
+                if not spending_by_category_i.empty:
+                    top_category_i = spending_by_category_i.iloc[0]
+                    st.info(
+                        f"Highest spending category: {top_category_i['category']} "
+                        f"at £{float(top_category_i['amount']):,.2f}."
+                    )
+
+        st.markdown("---")
+
+        st.markdown("### Strengths")
+
+        if strengths_i:
+            for strength in strengths_i:
+                st.success(strength)
+        else:
+            st.info("Add more records to identify strengths.")
+
+        st.markdown("### Warnings")
+
+        if warnings_i:
+            for warning in warnings_i:
+                st.warning(warning)
+        else:
+            st.success("No major warning signals found from the current data.")
+
+        st.markdown("### Action plan")
+
+        action_plan_i = build_personal_action_plan(
+            warnings=warnings_i,
+            remaining_budget=planned_remaining_i,
+            credit_utilisation=credit_utilisation_i,
+            subscriptions_total=subscriptions_total_i,
+            due_soon_count=due_soon_count_i,
+        )
+
+        for index, action in enumerate(action_plan_i, start=1):
+            st.write(f"{index}. {action}")
+
+        st.markdown("---")
+
+        st.markdown("### Monthly intelligence export")
+
+        export_rows_i = [
+            {"Metric": "Month", "Value": f"{calendar.month_name[int(selected_intel_month)]} {int(selected_intel_year)}"},
+            {"Metric": "Health score", "Value": health_score_i},
+            {"Metric": "Health label", "Value": health_label_i},
+            {"Metric": "Income logged", "Value": month_income_i},
+            {"Metric": "Spending logged", "Value": month_spending_i},
+            {"Metric": "Monthly net", "Value": month_net_i},
+            {"Metric": "Subscriptions total", "Value": subscriptions_total_i},
+            {"Metric": "Budget remaining", "Value": planned_remaining_i},
+            {"Metric": "Total assets", "Value": total_assets_i},
+            {"Metric": "Total debt", "Value": total_debt_i},
+            {"Metric": "Net worth", "Value": net_worth_i},
+            {"Metric": "Credit utilisation %", "Value": credit_utilisation_i},
+            {"Metric": "Savings goal progress %", "Value": active_savings_progress_i},
+            {"Metric": "Warnings", "Value": " | ".join(warnings_i) if warnings_i else "None"},
+            {"Metric": "Strengths", "Value": " | ".join(strengths_i) if strengths_i else "None"},
+            {"Metric": "Actions", "Value": " | ".join(action_plan_i) if action_plan_i else "None"},
+        ]
+
+        intelligence_export_i = pd.DataFrame(export_rows_i)
+
+        st.dataframe(intelligence_export_i, use_container_width=True)
+
+        st.download_button(
+            "Download monthly intelligence CSV",
+            data=intelligence_export_i.to_csv(index=False).encode("utf-8"),
+            file_name="hustlehq_personal_finance_intelligence.csv",
+            mime="text/csv",
+        )
+
+        st.markdown("---")
+
+        st.info(
+            "This intelligence tab depends on your data quality. The more often you update balances, budgets, transactions, "
+            "subscriptions and savings goals, the more useful the score becomes."
         )
 
 
