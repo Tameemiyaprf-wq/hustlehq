@@ -724,7 +724,7 @@ def calculate_personal_net_worth(account_records):
     records["balance"] = pd.to_numeric(records["balance"], errors="coerce").fillna(0)
 
     current_cash = records[
-        records["account_type"].isin(["Current Account", "Cash"])
+        records["account_type"].isin(["Current Account", "Digital Wallet", "Cash"])
     ]["balance"].sum()
 
     savings = records[
@@ -732,7 +732,7 @@ def calculate_personal_net_worth(account_records):
     ]["balance"].sum()
 
     investments = records[
-        records["account_type"] == "Investment"
+        records["account_type"].isin(["Investment", "Stocks & Shares ISA", "Lifetime ISA", "Pension"])
     ]["balance"].sum()
 
     debts = records[
@@ -988,7 +988,6 @@ page = st.sidebar.radio(
     [
         "Dashboard",
         "Mobile Quick Guide",
-        "Personal Finance",
         "Add Income",
         "Import Income CSV",
         "Add Expense",
@@ -1484,13 +1483,135 @@ st.markdown(
 )
 
 
+# =========================
+# TOP APP SWITCHER
+# =========================
+
+if "active_app_section" not in st.session_state:
+    st.session_state["active_app_section"] = "HustleHQ"
+
+st.markdown(
+    """
+    <style>
+    .hustlehq-top-switcher {
+        background: #FFFFFF;
+        border: 1px solid #E2E8F0;
+        border-radius: 18px;
+        padding: 12px 16px;
+        margin-bottom: 18px;
+        box-shadow: 0 1px 4px rgba(15, 23, 42, 0.08);
+    }
+
+    .hustlehq-top-title {
+        font-weight: 800;
+        color: #0B1F33;
+        font-size: 1.05rem;
+        margin-bottom: 2px;
+    }
+
+    .hustlehq-top-subtitle {
+        color: #64748B;
+        font-size: 0.88rem;
+    }
+
+    @media (max-width: 768px) {
+        .hustlehq-top-switcher {
+            padding: 10px 12px;
+            margin-bottom: 14px;
+        }
+
+        .hustlehq-top-title {
+            font-size: 0.95rem;
+        }
+
+        .hustlehq-top-subtitle {
+            font-size: 0.78rem;
+        }
+    }
+    </style>
+    """,
+    unsafe_allow_html=True,
+)
+
+top_menu_col, top_label_col = st.columns([0.13, 0.87])
+
+with top_menu_col:
+    with st.popover("☰"):
+        st.markdown("### Switch section")
+
+        if st.button("💼 HustleHQ", use_container_width=True, key="switch_to_hustlehq"):
+            st.session_state["active_app_section"] = "HustleHQ"
+            st.rerun()
+
+        if st.button("🏦 Personal Finance", use_container_width=True, key="switch_to_personal_finance"):
+            st.session_state["active_app_section"] = "Personal Finance"
+            st.rerun()
+
+current_app_section = st.session_state.get("active_app_section", "HustleHQ")
+
+with top_label_col:
+    if current_app_section == "Personal Finance":
+        st.markdown(
+            """
+            <div class="hustlehq-top-switcher">
+                <div class="hustlehq-top-title">🏦 Personal Finance</div>
+                <div class="hustlehq-top-subtitle">Personal accounts, savings, debt, net worth and subscriptions.</div>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+    else:
+        st.markdown(
+            """
+            <div class="hustlehq-top-switcher">
+                <div class="hustlehq-top-title">💼 HustleHQ</div>
+                <div class="hustlehq-top-subtitle">Side-hustle income, expenses, invoices, projects and tax records.</div>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+
+if current_app_section == "Personal Finance":
+    page = "Personal Finance"
+
+    st.markdown(
+        """
+        <style>
+        section[data-testid="stSidebar"] {
+            display: none !important;
+        }
+
+        div[data-testid="collapsedControl"] {
+            display: none !important;
+        }
+
+        .block-container {
+            max-width: 1400px;
+            padding-left: 2rem;
+            padding-right: 2rem;
+        }
+
+        @media (max-width: 768px) {
+            .block-container {
+                padding-left: 1rem;
+                padding-right: 1rem;
+            }
+        }
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
+
 if page == "Personal Finance":
     st.title("Personal Finance")
     st.subheader("Personal money, debt, savings and subscription control centre")
 
     st.info(
         "This section is for personal finance tracking. Bank connections are not live yet. "
-        "For now, update balances manually. Later, this can be upgraded with Open Banking where available."
+        "For now, update balances manually for providers like NatWest, Santander, Zopa, American Express, Trading 212, PayPal and AJ Bell Dodl. "
+        "Later, this can be upgraded with Open Banking or platform integrations where available."
     )
 
     account_records = load_personal_account_records()
@@ -1523,6 +1644,9 @@ if page == "Personal Finance":
         "NatWest",
         "Zopa",
         "American Express",
+        "Trading 212",
+        "PayPal",
+        "AJ Bell Dodl",
         "Nationwide",
         "Lloyds",
         "Revolut",
@@ -1617,6 +1741,10 @@ if page == "Personal Finance":
                         "Credit Card",
                         "Loan/Debt",
                         "Investment",
+                        "Stocks & Shares ISA",
+                        "Lifetime ISA",
+                        "Pension",
+                        "Digital Wallet",
                         "Cash",
                     ]
                 )
@@ -1743,11 +1871,11 @@ if page == "Personal Finance":
         st.markdown("### Savings tracker")
 
         savings_records = account_records[
-            account_records["account_type"] == "Savings Account"
+            account_records["account_type"].isin(["Savings Account", "Lifetime ISA"])
         ].copy()
 
         if savings_records.empty:
-            st.warning("No savings accounts added yet. Add them in the Accounts tab using account type: Savings Account.")
+            st.warning("No savings accounts or Lifetime ISA accounts added yet. Add them in the Accounts tab using account type: Savings Account or Lifetime ISA.")
         else:
             savings_records["balance"] = pd.to_numeric(savings_records["balance"], errors="coerce").fillna(0)
 
