@@ -230,6 +230,7 @@ CONTACT_FILE = DATA_FOLDER / "contact_records.csv"
 PERSONAL_ACCOUNT_FILE = DATA_FOLDER / "personal_account_records.csv"
 PERSONAL_SUBSCRIPTION_FILE = DATA_FOLDER / "personal_subscription_records.csv"
 PERSONAL_SAVINGS_GOAL_FILE = DATA_FOLDER / "personal_savings_goal_records.csv"
+PERSONAL_BUDGET_FILE = DATA_FOLDER / "personal_budget_records.csv"
 
 
 
@@ -676,6 +677,83 @@ def load_personal_account_records():
 
 def save_personal_account_records(records):
     records.to_csv(PERSONAL_ACCOUNT_FILE, index=False)
+
+
+def load_personal_budget_records():
+    columns = [
+        "date_added",
+        "budget_month",
+        "budget_year",
+        "income_expected",
+        "rent_housing",
+        "groceries",
+        "transport",
+        "phone_internet",
+        "personal_spending",
+        "debt_repayment",
+        "savings_contribution",
+        "other_fixed_costs",
+        "subscription_total",
+        "total_planned_outgoing",
+        "remaining_money",
+        "status",
+        "notes",
+    ]
+
+    if PERSONAL_BUDGET_FILE.exists():
+        records = pd.read_csv(PERSONAL_BUDGET_FILE)
+
+        for column in columns:
+            if column not in records.columns:
+                records[column] = ""
+
+        money_columns = [
+            "income_expected",
+            "rent_housing",
+            "groceries",
+            "transport",
+            "phone_internet",
+            "personal_spending",
+            "debt_repayment",
+            "savings_contribution",
+            "other_fixed_costs",
+            "subscription_total",
+            "total_planned_outgoing",
+            "remaining_money",
+        ]
+
+        for column in money_columns:
+            records[column] = pd.to_numeric(records[column], errors="coerce").fillna(0)
+
+        return records[columns]
+
+    return pd.DataFrame(columns=columns)
+
+
+def save_personal_budget_records(records):
+    records.to_csv(PERSONAL_BUDGET_FILE, index=False)
+
+
+def get_subscription_total_for_month(subscription_records, selected_year, selected_month):
+    if subscription_records.empty:
+        return 0
+
+    records = subscription_records.copy()
+
+    records["amount"] = pd.to_numeric(records["amount"], errors="coerce").fillna(0)
+    records["next_payment_date_dt"] = pd.to_datetime(records["next_payment_date"], errors="coerce")
+
+    month_records = records[
+        (records["status"] == "Active")
+        & (records["next_payment_date_dt"].dt.year == int(selected_year))
+        & (records["next_payment_date_dt"].dt.month == int(selected_month))
+    ].copy()
+
+    if month_records.empty:
+        return 0
+
+    return month_records["amount"].sum()
+
 
 
 def load_personal_savings_goal_records():
@@ -1783,6 +1861,7 @@ if page == "Personal Finance":
             "Subscriptions",
             "Bills Forecast",
             "Subscription Calendar",
+            "Monthly Budget",
         ]
     )
 
@@ -3180,6 +3259,284 @@ if page == "Personal Finance":
                     ],
                     use_container_width=True,
                 )
+
+    with personal_tabs[8]:
+        st.markdown("### Monthly Budget")
+        st.subheader("Plan income, bills, debt repayments, savings and leftover money")
+
+        budget_records = load_personal_budget_records()
+
+        today = pd.Timestamp.today()
+
+        month_options = list(range(1, 13))
+
+        budget_col1, budget_col2 = st.columns(2)
+
+        with budget_col1:
+            selected_budget_month = st.selectbox(
+                "Budget month",
+                month_options,
+                index=int(today.month) - 1,
+                format_func=lambda month_number: calendar.month_name[month_number],
+                key="personal_budget_month_select",
+            )
+
+        with budget_col2:
+            selected_budget_year = st.number_input(
+                "Budget year",
+                min_value=2020,
+                max_value=2100,
+                value=int(today.year),
+                step=1,
+                key="personal_budget_year_select",
+            )
+
+        subscription_total_for_month = get_subscription_total_for_month(
+            subscription_records,
+            int(selected_budget_year),
+            int(selected_budget_month),
+        )
+
+        st.info(
+            f"Active subscriptions found for {calendar.month_name[int(selected_budget_month)]} "
+            f"{int(selected_budget_year)}: £{subscription_total_for_month:,.2f}"
+        )
+
+        st.markdown("### Build monthly budget")
+
+        with st.form("add_personal_monthly_budget_form"):
+            income_expected = st.number_input(
+                "Expected personal income this month (£)",
+                min_value=0.0,
+                step=50.0,
+                value=0.0,
+                help="Use expected take-home pay or money available for the month."
+            )
+
+            st.markdown("#### Essentials")
+
+            essential_col1, essential_col2 = st.columns(2)
+
+            with essential_col1:
+                rent_housing = st.number_input(
+                    "Rent / housing (£)",
+                    min_value=0.0,
+                    step=25.0,
+                    value=0.0
+                )
+
+                groceries = st.number_input(
+                    "Groceries / food (£)",
+                    min_value=0.0,
+                    step=10.0,
+                    value=0.0
+                )
+
+                transport = st.number_input(
+                    "Transport (£)",
+                    min_value=0.0,
+                    step=10.0,
+                    value=0.0
+                )
+
+            with essential_col2:
+                phone_internet = st.number_input(
+                    "Phone / internet (£)",
+                    min_value=0.0,
+                    step=5.0,
+                    value=0.0
+                )
+
+                personal_spending = st.number_input(
+                    "Personal spending (£)",
+                    min_value=0.0,
+                    step=10.0,
+                    value=0.0
+                )
+
+                other_fixed_costs = st.number_input(
+                    "Other fixed costs (£)",
+                    min_value=0.0,
+                    step=10.0,
+                    value=0.0
+                )
+
+            st.markdown("#### Financial priorities")
+
+            priority_col1, priority_col2 = st.columns(2)
+
+            with priority_col1:
+                debt_repayment = st.number_input(
+                    "Planned debt repayment (£)",
+                    min_value=0.0,
+                    step=10.0,
+                    value=0.0
+                )
+
+            with priority_col2:
+                savings_contribution = st.number_input(
+                    "Planned savings contribution (£)",
+                    min_value=0.0,
+                    step=10.0,
+                    value=0.0
+                )
+
+            status = st.selectbox(
+                "Budget status",
+                [
+                    "Draft",
+                    "Active",
+                    "Completed",
+                    "Replaced",
+                ]
+            )
+
+            notes = st.text_area(
+                "Budget notes",
+                placeholder="Example: payday timing, expected M&S income, debt payment plan, savings target."
+            )
+
+            submitted_budget = st.form_submit_button("Save monthly budget")
+
+        total_planned_outgoing = (
+            rent_housing
+            + groceries
+            + transport
+            + phone_internet
+            + personal_spending
+            + other_fixed_costs
+            + debt_repayment
+            + savings_contribution
+            + subscription_total_for_month
+        )
+
+        remaining_money = income_expected - total_planned_outgoing
+
+        st.markdown("### Budget preview")
+
+        preview_col1, preview_col2, preview_col3, preview_col4 = st.columns(4)
+
+        preview_col1.metric("Expected income", f"£{income_expected:,.2f}")
+        preview_col2.metric("Planned outgoing", f"£{total_planned_outgoing:,.2f}")
+        preview_col3.metric("Subscriptions", f"£{subscription_total_for_month:,.2f}")
+        preview_col4.metric("Remaining", f"£{remaining_money:,.2f}")
+
+        if income_expected <= 0:
+            st.warning("Add expected income to make the budget useful.")
+        elif remaining_money < 0:
+            st.error("This budget is negative. Planned costs are higher than expected income.")
+        elif remaining_money < 50:
+            st.warning("This budget leaves a very small buffer.")
+        else:
+            st.success("This budget leaves a positive buffer.")
+
+        if submitted_budget:
+            if income_expected <= 0:
+                st.error("Add expected income before saving this budget.")
+            else:
+                new_budget = pd.DataFrame(
+                    [
+                        {
+                            "date_added": str(pd.Timestamp.today().date()),
+                            "budget_month": calendar.month_name[int(selected_budget_month)],
+                            "budget_year": int(selected_budget_year),
+                            "income_expected": income_expected,
+                            "rent_housing": rent_housing,
+                            "groceries": groceries,
+                            "transport": transport,
+                            "phone_internet": phone_internet,
+                            "personal_spending": personal_spending,
+                            "debt_repayment": debt_repayment,
+                            "savings_contribution": savings_contribution,
+                            "other_fixed_costs": other_fixed_costs,
+                            "subscription_total": subscription_total_for_month,
+                            "total_planned_outgoing": total_planned_outgoing,
+                            "remaining_money": remaining_money,
+                            "status": status,
+                            "notes": notes.strip(),
+                        }
+                    ]
+                )
+
+                budget_records = pd.concat([budget_records, new_budget], ignore_index=True)
+                save_personal_budget_records(budget_records)
+
+                st.success("Monthly budget saved.")
+                st.rerun()
+
+        st.markdown("---")
+
+        st.markdown("### Budget history")
+
+        if budget_records.empty:
+            st.warning("No monthly budgets saved yet.")
+        else:
+            budget_records["income_expected"] = pd.to_numeric(
+                budget_records["income_expected"],
+                errors="coerce"
+            ).fillna(0)
+
+            budget_records["total_planned_outgoing"] = pd.to_numeric(
+                budget_records["total_planned_outgoing"],
+                errors="coerce"
+            ).fillna(0)
+
+            budget_records["remaining_money"] = pd.to_numeric(
+                budget_records["remaining_money"],
+                errors="coerce"
+            ).fillna(0)
+
+            active_budgets = budget_records[
+                budget_records["status"].isin(["Draft", "Active"])
+            ].copy()
+
+            hist_col1, hist_col2, hist_col3 = st.columns(3)
+
+            hist_col1.metric("Budgets saved", len(budget_records))
+            hist_col2.metric("Active/draft budgets", len(active_budgets))
+            hist_col3.metric(
+                "Latest remaining",
+                f"£{budget_records.iloc[-1]['remaining_money']:,.2f}"
+            )
+
+            st.dataframe(budget_records, use_container_width=True)
+
+            st.markdown("### Delete budget record")
+
+            budget_delete_options = [
+                f"{index} - {row['budget_month']} {row['budget_year']} - {row['status']} - Remaining £{float(row['remaining_money']):,.2f}"
+                for index, row in budget_records.iterrows()
+            ]
+
+            selected_budget_delete = st.selectbox(
+                "Choose budget to delete",
+                budget_delete_options,
+                key="personal_budget_delete_select"
+            )
+
+            if st.button("Delete selected budget"):
+                selected_delete_index = int(selected_budget_delete.split(" - ")[0])
+                budget_records = budget_records.drop(index=selected_delete_index).reset_index(drop=True)
+                save_personal_budget_records(budget_records)
+
+                st.success("Budget record deleted.")
+                st.rerun()
+
+            st.download_button(
+                "Download monthly budgets CSV",
+                data=budget_records.to_csv(index=False).encode("utf-8"),
+                file_name="hustlehq_personal_monthly_budgets.csv",
+                mime="text/csv",
+            )
+
+        st.markdown("---")
+
+        st.info(
+            "Use this tab before the month starts, then update it after payday or when subscriptions/debt repayments change."
+        )
+
+
+
 
     st.markdown("---")
 
