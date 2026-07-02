@@ -229,6 +229,7 @@ RECURRING_EXPENSE_FILE = DATA_FOLDER / "recurring_expense_records.csv"
 CONTACT_FILE = DATA_FOLDER / "contact_records.csv"
 PERSONAL_ACCOUNT_FILE = DATA_FOLDER / "personal_account_records.csv"
 PERSONAL_SUBSCRIPTION_FILE = DATA_FOLDER / "personal_subscription_records.csv"
+PERSONAL_SAVINGS_GOAL_FILE = DATA_FOLDER / "personal_savings_goal_records.csv"
 
 
 
@@ -675,6 +676,56 @@ def load_personal_account_records():
 
 def save_personal_account_records(records):
     records.to_csv(PERSONAL_ACCOUNT_FILE, index=False)
+
+
+def load_personal_savings_goal_records():
+    columns = [
+        "date_added",
+        "goal_name",
+        "target_amount",
+        "current_amount",
+        "linked_account",
+        "deadline",
+        "priority",
+        "status",
+        "notes",
+    ]
+
+    if PERSONAL_SAVINGS_GOAL_FILE.exists():
+        records = pd.read_csv(PERSONAL_SAVINGS_GOAL_FILE)
+
+        for column in columns:
+            if column not in records.columns:
+                records[column] = ""
+
+        records["target_amount"] = pd.to_numeric(records["target_amount"], errors="coerce").fillna(0)
+        records["current_amount"] = pd.to_numeric(records["current_amount"], errors="coerce").fillna(0)
+
+        return records[columns]
+
+    return pd.DataFrame(columns=columns)
+
+
+def save_personal_savings_goal_records(records):
+    records.to_csv(PERSONAL_SAVINGS_GOAL_FILE, index=False)
+
+
+def calculate_goal_months_remaining(deadline_value):
+    deadline_date = pd.to_datetime(deadline_value, errors="coerce")
+
+    if pd.isna(deadline_date):
+        return 0
+
+    today = pd.Timestamp.today().normalize()
+
+    if deadline_date <= today:
+        return 0
+
+    days_remaining = (deadline_date - today).days
+    months_remaining = max(math.ceil(days_remaining / 30), 1)
+
+    return months_remaining
+
 
 
 def load_personal_subscription_records():
@@ -1727,6 +1778,7 @@ if page == "Personal Finance":
             "Dashboard",
             "Accounts",
             "Savings",
+            "Savings Goals",
             "Debt Manager",
             "Subscriptions",
             "Bills Forecast",
@@ -2145,6 +2197,292 @@ if page == "Personal Finance":
         )
 
     with personal_tabs[3]:
+        st.markdown("### Savings Goals")
+        st.subheader("Track emergency funds, move-out savings, ISA goals and personal targets")
+
+        savings_goal_records = load_personal_savings_goal_records()
+
+        savings_account_options = ["Manual / not linked"]
+
+        if not account_records.empty:
+            savings_like_accounts = account_records[
+                account_records["account_type"].isin(
+                    [
+                        "Savings Account",
+                        "Lifetime ISA",
+                        "Stocks & Shares ISA",
+                        "Investment",
+                        "Pension",
+                    ]
+                )
+            ].copy()
+
+            if not savings_like_accounts.empty:
+                savings_account_options += [
+                    f"{row['provider']} - {row['account_name']}"
+                    for _, row in savings_like_accounts.iterrows()
+                ]
+
+        st.markdown("### Add savings goal")
+
+        with st.form("add_personal_savings_goal_form"):
+            goal_col1, goal_col2 = st.columns(2)
+
+            with goal_col1:
+                goal_name = st.text_input(
+                    "Goal name",
+                    placeholder="Example: Emergency fund, Move-out fund, LISA deposit, Laptop fund"
+                )
+
+                target_amount = st.number_input(
+                    "Target amount (£)",
+                    min_value=0.0,
+                    step=50.0,
+                    value=0.0
+                )
+
+                current_amount = st.number_input(
+                    "Current amount saved (£)",
+                    min_value=0.0,
+                    step=25.0,
+                    value=0.0
+                )
+
+                linked_account = st.selectbox(
+                    "Linked account",
+                    savings_account_options
+                )
+
+            with goal_col2:
+                deadline = st.date_input("Goal deadline")
+
+                priority = st.selectbox(
+                    "Priority",
+                    [
+                        "High",
+                        "Medium",
+                        "Low",
+                    ]
+                )
+
+                status = st.selectbox(
+                    "Status",
+                    [
+                        "Active",
+                        "Paused",
+                        "Completed",
+                        "Cancelled",
+                    ]
+                )
+
+            notes = st.text_area("Goal notes")
+
+            submitted_goal = st.form_submit_button("Save savings goal")
+
+        if submitted_goal:
+            if not goal_name.strip():
+                st.error("Add a goal name before saving.")
+            elif target_amount <= 0:
+                st.error("Add a target amount above £0.")
+            else:
+                new_goal = pd.DataFrame(
+                    [
+                        {
+                            "date_added": str(pd.Timestamp.today().date()),
+                            "goal_name": goal_name.strip(),
+                            "target_amount": target_amount,
+                            "current_amount": current_amount,
+                            "linked_account": linked_account,
+                            "deadline": str(deadline),
+                            "priority": priority,
+                            "status": status,
+                            "notes": notes.strip(),
+                        }
+                    ]
+                )
+
+                savings_goal_records = pd.concat(
+                    [savings_goal_records, new_goal],
+                    ignore_index=True
+                )
+
+                save_personal_savings_goal_records(savings_goal_records)
+
+                st.success("Savings goal saved.")
+                st.rerun()
+
+        st.markdown("---")
+
+        st.markdown("### Savings goal overview")
+
+        if savings_goal_records.empty:
+            st.warning("No savings goals saved yet.")
+        else:
+            savings_goal_records["target_amount"] = pd.to_numeric(
+                savings_goal_records["target_amount"],
+                errors="coerce"
+            ).fillna(0)
+
+            savings_goal_records["current_amount"] = pd.to_numeric(
+                savings_goal_records["current_amount"],
+                errors="coerce"
+            ).fillna(0)
+
+            active_goals = savings_goal_records[
+                savings_goal_records["status"] == "Active"
+            ].copy()
+
+            total_target = active_goals["target_amount"].sum() if not active_goals.empty else 0
+            total_saved = active_goals["current_amount"].sum() if not active_goals.empty else 0
+            remaining_to_save = max(total_target - total_saved, 0)
+
+            overall_progress = 0
+
+            if total_target > 0:
+                overall_progress = min((total_saved / total_target) * 100, 100)
+
+            goal_metric1, goal_metric2, goal_metric3, goal_metric4 = st.columns(4)
+
+            goal_metric1.metric("Active goals", len(active_goals))
+            goal_metric2.metric("Total target", f"£{total_target:,.2f}")
+            goal_metric3.metric("Saved so far", f"£{total_saved:,.2f}")
+            goal_metric4.metric("Remaining", f"£{remaining_to_save:,.2f}")
+
+            st.progress(overall_progress / 100)
+            st.caption(f"Overall active-goal progress: {overall_progress:,.1f}%")
+
+            display_goals = savings_goal_records.copy()
+
+            display_goals["progress_%"] = display_goals.apply(
+                lambda row: min((row["current_amount"] / row["target_amount"] * 100), 100) if row["target_amount"] > 0 else 0,
+                axis=1
+            )
+
+            display_goals["remaining_amount"] = display_goals.apply(
+                lambda row: max(row["target_amount"] - row["current_amount"], 0),
+                axis=1
+            )
+
+            display_goals["months_remaining"] = display_goals["deadline"].apply(
+                calculate_goal_months_remaining
+            )
+
+            display_goals["monthly_needed"] = display_goals.apply(
+                lambda row: row["remaining_amount"] / row["months_remaining"] if row["months_remaining"] > 0 else row["remaining_amount"],
+                axis=1
+            )
+
+            st.markdown("### Goal table")
+
+            st.dataframe(
+                display_goals[
+                    [
+                        "goal_name",
+                        "target_amount",
+                        "current_amount",
+                        "remaining_amount",
+                        "progress_%",
+                        "monthly_needed",
+                        "linked_account",
+                        "deadline",
+                        "priority",
+                        "status",
+                        "notes",
+                    ]
+                ],
+                use_container_width=True,
+            )
+
+            st.markdown("### Emergency fund check")
+
+            emergency_keywords = ["emergency", "buffer", "safety"]
+
+            emergency_goals = display_goals[
+                display_goals["goal_name"].astype(str).str.lower().apply(
+                    lambda value: any(keyword in value for keyword in emergency_keywords)
+                )
+            ].copy()
+
+            if emergency_goals.empty:
+                st.info("No emergency fund goal found. Consider adding one called Emergency Fund or Safety Buffer.")
+            else:
+                emergency_saved = emergency_goals["current_amount"].sum()
+                emergency_target = emergency_goals["target_amount"].sum()
+
+                emergency_progress = 0
+
+                if emergency_target > 0:
+                    emergency_progress = min((emergency_saved / emergency_target) * 100, 100)
+
+                st.metric("Emergency fund saved", f"£{emergency_saved:,.2f}")
+                st.progress(emergency_progress / 100)
+                st.caption(f"Emergency fund progress: {emergency_progress:,.1f}%")
+
+            st.markdown("### Update savings goal progress")
+
+            goal_options = [
+                f"{index} - {row['goal_name']} - £{float(row['current_amount']):,.2f} / £{float(row['target_amount']):,.2f}"
+                for index, row in savings_goal_records.iterrows()
+            ]
+
+            selected_goal_update = st.selectbox(
+                "Choose goal to update",
+                goal_options,
+                key="personal_savings_goal_update_select"
+            )
+
+            selected_goal_index = int(selected_goal_update.split(" - ")[0])
+            selected_goal_row = savings_goal_records.loc[selected_goal_index]
+
+            updated_current_amount = st.number_input(
+                "Updated current amount saved (£)",
+                min_value=0.0,
+                step=25.0,
+                value=float(selected_goal_row["current_amount"]),
+                key="personal_savings_goal_updated_amount"
+            )
+
+            if st.button("Update selected savings goal"):
+                savings_goal_records.loc[selected_goal_index, "current_amount"] = updated_current_amount
+                save_personal_savings_goal_records(savings_goal_records)
+
+                st.success("Savings goal updated.")
+                st.rerun()
+
+            st.markdown("### Delete savings goal")
+
+            selected_goal_delete = st.selectbox(
+                "Choose goal to delete",
+                goal_options,
+                key="personal_savings_goal_delete_select"
+            )
+
+            if st.button("Delete selected savings goal"):
+                selected_delete_index = int(selected_goal_delete.split(" - ")[0])
+                savings_goal_records = savings_goal_records.drop(index=selected_delete_index).reset_index(drop=True)
+                save_personal_savings_goal_records(savings_goal_records)
+
+                st.success("Savings goal deleted.")
+                st.rerun()
+
+            st.download_button(
+                "Download savings goals CSV",
+                data=savings_goal_records.to_csv(index=False).encode("utf-8"),
+                file_name="hustlehq_personal_savings_goals.csv",
+                mime="text/csv",
+            )
+
+        st.markdown("---")
+
+        st.info(
+            "Use savings goals for money you are building up intentionally. "
+            "Use the Accounts tab for the actual balance inside each account."
+        )
+
+
+
+
+    with personal_tabs[4]:
         st.markdown("### Debt Manager")
         st.subheader("Track credit cards, loans, repayments and available credit")
 
@@ -2335,7 +2673,7 @@ if page == "Personal Finance":
 
 
 
-    with personal_tabs[4]:
+    with personal_tabs[5]:
         st.markdown("### Add subscription")
 
         account_options = []
@@ -2536,7 +2874,7 @@ if page == "Personal Finance":
                 mime="text/csv",
             )
 
-    with personal_tabs[5]:
+    with personal_tabs[6]:
         st.markdown("### Bills Forecast")
         st.subheader("See what is coming out, when, and from which account")
 
@@ -2767,7 +3105,7 @@ if page == "Personal Finance":
         )
 
 
-    with personal_tabs[6]:
+    with personal_tabs[7]:
         st.markdown("### Subscription calendar")
 
         if subscription_records.empty:
