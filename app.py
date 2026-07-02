@@ -231,6 +231,7 @@ PERSONAL_ACCOUNT_FILE = DATA_FOLDER / "personal_account_records.csv"
 PERSONAL_SUBSCRIPTION_FILE = DATA_FOLDER / "personal_subscription_records.csv"
 PERSONAL_SAVINGS_GOAL_FILE = DATA_FOLDER / "personal_savings_goal_records.csv"
 PERSONAL_BUDGET_FILE = DATA_FOLDER / "personal_budget_records.csv"
+PERSONAL_TRANSACTION_FILE = DATA_FOLDER / "personal_transaction_records.csv"
 
 
 
@@ -677,6 +678,38 @@ def load_personal_account_records():
 
 def save_personal_account_records(records):
     records.to_csv(PERSONAL_ACCOUNT_FILE, index=False)
+
+
+def load_personal_transaction_records():
+    columns = [
+        "date_added",
+        "transaction_date",
+        "transaction_type",
+        "account",
+        "category",
+        "description",
+        "amount",
+        "status",
+        "notes",
+    ]
+
+    if PERSONAL_TRANSACTION_FILE.exists():
+        records = pd.read_csv(PERSONAL_TRANSACTION_FILE)
+
+        for column in columns:
+            if column not in records.columns:
+                records[column] = ""
+
+        records["amount"] = pd.to_numeric(records["amount"], errors="coerce").fillna(0)
+
+        return records[columns]
+
+    return pd.DataFrame(columns=columns)
+
+
+def save_personal_transaction_records(records):
+    records.to_csv(PERSONAL_TRANSACTION_FILE, index=False)
+
 
 
 def load_personal_budget_records():
@@ -1862,6 +1895,7 @@ if page == "Personal Finance":
             "Bills Forecast",
             "Subscription Calendar",
             "Monthly Budget",
+            "Transactions",
         ]
     )
 
@@ -3533,6 +3567,337 @@ if page == "Personal Finance":
 
         st.info(
             "Use this tab before the month starts, then update it after payday or when subscriptions/debt repayments change."
+        )
+
+
+
+
+    with personal_tabs[9]:
+        st.markdown("### Transactions")
+        st.subheader("Track personal income, spending and transfers manually")
+
+        transaction_records = load_personal_transaction_records()
+
+        account_options = []
+
+        if not account_records.empty:
+            account_options = [
+                f"{row['provider']} - {row['account_name']}"
+                for _, row in account_records.iterrows()
+            ]
+
+        if not account_options:
+            account_options = [
+                "Santander",
+                "NatWest",
+                "Zopa",
+                "American Express",
+                "Trading 212",
+                "PayPal",
+                "AJ Bell Dodl",
+                "Nationwide",
+                "Lloyds",
+                "Revolut",
+                "Monzo",
+                "Halifax",
+                "Other",
+            ]
+
+        st.markdown("### Add transaction")
+
+        with st.form("add_personal_transaction_form"):
+            trans_col1, trans_col2 = st.columns(2)
+
+            with trans_col1:
+                transaction_date = st.date_input("Transaction date")
+
+                transaction_type = st.selectbox(
+                    "Transaction type",
+                    [
+                        "Expense",
+                        "Income",
+                        "Transfer",
+                    ]
+                )
+
+                account = st.selectbox(
+                    "Account",
+                    account_options
+                )
+
+                category = st.selectbox(
+                    "Category",
+                    [
+                        "Income",
+                        "Food/Groceries",
+                        "Transport",
+                        "Subscriptions",
+                        "Shopping",
+                        "Debt Repayment",
+                        "Savings Transfer",
+                        "Entertainment",
+                        "Health/Fitness",
+                        "Education",
+                        "Bills",
+                        "Family/Friends",
+                        "Beauty",
+                        "Clothing",
+                        "Investing",
+                        "Other",
+                    ]
+                )
+
+            with trans_col2:
+                description = st.text_input(
+                    "Description",
+                    placeholder="Example: Tesco, Amex payment, M&S wages, Spotify"
+                )
+
+                amount = st.number_input(
+                    "Amount (£)",
+                    min_value=0.0,
+                    step=1.0,
+                    value=0.0
+                )
+
+                status = st.selectbox(
+                    "Status",
+                    [
+                        "Cleared",
+                        "Pending",
+                        "Planned",
+                    ]
+                )
+
+            notes = st.text_area("Notes")
+
+            submitted_transaction = st.form_submit_button("Save transaction")
+
+        if submitted_transaction:
+            if amount <= 0:
+                st.error("Add an amount above £0.")
+            elif not description.strip():
+                st.error("Add a description before saving.")
+            else:
+                new_transaction = pd.DataFrame(
+                    [
+                        {
+                            "date_added": str(pd.Timestamp.today().date()),
+                            "transaction_date": str(transaction_date),
+                            "transaction_type": transaction_type,
+                            "account": account,
+                            "category": category,
+                            "description": description.strip(),
+                            "amount": amount,
+                            "status": status,
+                            "notes": notes.strip(),
+                        }
+                    ]
+                )
+
+                transaction_records = pd.concat(
+                    [transaction_records, new_transaction],
+                    ignore_index=True
+                )
+
+                save_personal_transaction_records(transaction_records)
+
+                st.success("Transaction saved.")
+                st.rerun()
+
+        st.markdown("---")
+
+        st.markdown("### Transaction dashboard")
+
+        if transaction_records.empty:
+            st.warning("No personal transactions saved yet.")
+        else:
+            transaction_records["amount"] = pd.to_numeric(
+                transaction_records["amount"],
+                errors="coerce"
+            ).fillna(0)
+
+            transaction_records["transaction_date_dt"] = pd.to_datetime(
+                transaction_records["transaction_date"],
+                errors="coerce"
+            )
+
+            today = pd.Timestamp.today()
+
+            filter_col1, filter_col2 = st.columns(2)
+
+            with filter_col1:
+                selected_transaction_month = st.selectbox(
+                    "Month",
+                    list(range(1, 13)),
+                    index=int(today.month) - 1,
+                    format_func=lambda month_number: calendar.month_name[month_number],
+                    key="personal_transaction_month_select",
+                )
+
+            with filter_col2:
+                selected_transaction_year = st.number_input(
+                    "Year",
+                    min_value=2020,
+                    max_value=2100,
+                    value=int(today.year),
+                    step=1,
+                    key="personal_transaction_year_select",
+                )
+
+            month_transactions = transaction_records[
+                (transaction_records["transaction_date_dt"].dt.year == int(selected_transaction_year))
+                & (transaction_records["transaction_date_dt"].dt.month == int(selected_transaction_month))
+            ].copy()
+
+            if month_transactions.empty:
+                st.info("No transactions found for the selected month.")
+            else:
+                month_income = month_transactions[
+                    month_transactions["transaction_type"] == "Income"
+                ]["amount"].sum()
+
+                month_expenses = month_transactions[
+                    month_transactions["transaction_type"] == "Expense"
+                ]["amount"].sum()
+
+                month_transfers = month_transactions[
+                    month_transactions["transaction_type"] == "Transfer"
+                ]["amount"].sum()
+
+                month_net = month_income - month_expenses
+
+                metric_col1, metric_col2, metric_col3, metric_col4 = st.columns(4)
+
+                metric_col1.metric("Income", f"£{month_income:,.2f}")
+                metric_col2.metric("Expenses", f"£{month_expenses:,.2f}")
+                metric_col3.metric("Transfers", f"£{month_transfers:,.2f}")
+                metric_col4.metric("Net", f"£{month_net:,.2f}")
+
+                if month_net < 0:
+                    st.error("You spent more than you logged as income for this month.")
+                elif month_expenses > 0:
+                    st.success("This month currently has a positive personal cash flow.")
+
+                st.markdown("### Transactions for selected month")
+
+                st.dataframe(
+                    month_transactions[
+                        [
+                            "transaction_date",
+                            "transaction_type",
+                            "account",
+                            "category",
+                            "description",
+                            "amount",
+                            "status",
+                            "notes",
+                        ]
+                    ],
+                    use_container_width=True,
+                )
+
+                st.markdown("### Spending by category")
+
+                spending_by_category = (
+                    month_transactions[
+                        month_transactions["transaction_type"] == "Expense"
+                    ]
+                    .groupby("category", as_index=False)["amount"]
+                    .sum()
+                    .sort_values("amount", ascending=False)
+                )
+
+                if spending_by_category.empty:
+                    st.info("No expense transactions found for this month.")
+                else:
+                    st.dataframe(spending_by_category, use_container_width=True)
+
+                st.markdown("### Spending by account")
+
+                spending_by_account = (
+                    month_transactions[
+                        month_transactions["transaction_type"] == "Expense"
+                    ]
+                    .groupby("account", as_index=False)["amount"]
+                    .sum()
+                    .sort_values("amount", ascending=False)
+                )
+
+                if spending_by_account.empty:
+                    st.info("No account spending found for this month.")
+                else:
+                    st.dataframe(spending_by_account, use_container_width=True)
+
+                st.markdown("### Income by account")
+
+                income_by_account = (
+                    month_transactions[
+                        month_transactions["transaction_type"] == "Income"
+                    ]
+                    .groupby("account", as_index=False)["amount"]
+                    .sum()
+                    .sort_values("amount", ascending=False)
+                )
+
+                if income_by_account.empty:
+                    st.info("No income transactions found for this month.")
+                else:
+                    st.dataframe(income_by_account, use_container_width=True)
+
+            st.markdown("---")
+
+            st.markdown("### All transactions")
+
+            st.dataframe(
+                transaction_records[
+                    [
+                        "transaction_date",
+                        "transaction_type",
+                        "account",
+                        "category",
+                        "description",
+                        "amount",
+                        "status",
+                        "notes",
+                    ]
+                ],
+                use_container_width=True,
+            )
+
+            st.markdown("### Delete transaction")
+
+            transaction_delete_options = [
+                f"{index} - {row['transaction_date']} - {row['transaction_type']} - {row['description']} - £{float(row['amount']):,.2f}"
+                for index, row in transaction_records.iterrows()
+            ]
+
+            selected_transaction_delete = st.selectbox(
+                "Choose transaction to delete",
+                transaction_delete_options,
+                key="personal_transaction_delete_select"
+            )
+
+            if st.button("Delete selected transaction"):
+                selected_delete_index = int(selected_transaction_delete.split(" - ")[0])
+                transaction_records = transaction_records.drop(index=selected_delete_index).reset_index(drop=True)
+                save_personal_transaction_records(transaction_records)
+
+                st.success("Transaction deleted.")
+                st.rerun()
+
+            st.download_button(
+                "Download personal transactions CSV",
+                data=transaction_records.drop(columns=["transaction_date_dt"], errors="ignore").to_csv(index=False).encode("utf-8"),
+                file_name="hustlehq_personal_transactions.csv",
+                mime="text/csv",
+            )
+
+        st.markdown("---")
+
+        st.info(
+            "Use this tab for manual tracking until bank imports or Open Banking connections are added. "
+            "For now, it does not automatically update your account balances."
         )
 
 
