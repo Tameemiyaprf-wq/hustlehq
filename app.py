@@ -530,6 +530,14 @@ def load_invoice_records():
 
         records["amount"] = pd.to_numeric(records["amount"], errors="coerce").fillna(0)
 
+        if "balance_applied" not in records.columns:
+            records["balance_applied"] = "No"
+
+        if "applied_date" not in records.columns:
+            records["applied_date"] = ""
+
+        records["balance_applied"] = records["balance_applied"].replace("", "No").fillna("No")
+
         return records[columns]
 
     return pd.DataFrame(columns=columns)
@@ -680,6 +688,50 @@ def save_personal_account_records(records):
     records.to_csv(PERSONAL_ACCOUNT_FILE, index=False)
 
 
+def normalise_account_label(value):
+    return str(value).strip().lower()
+
+
+def find_personal_account_index(account_records, transaction_account):
+    if account_records.empty:
+        return None
+
+    transaction_account_norm = normalise_account_label(transaction_account)
+
+    for index, row in account_records.iterrows():
+        full_label = f"{row['provider']} - {row['account_name']}"
+        provider_only = str(row["provider"])
+
+        if normalise_account_label(full_label) == transaction_account_norm:
+            return index
+
+        if normalise_account_label(provider_only) == transaction_account_norm:
+            return index
+
+        if normalise_account_label(str(row["account_name"])) == transaction_account_norm:
+            return index
+
+    return None
+
+
+def calculate_transaction_balance_impact(transaction_type, account_type, amount):
+    amount = float(amount)
+
+    if transaction_type == "Income":
+        return amount
+
+    if transaction_type == "Expense":
+        if account_type in ["Credit Card", "Loan/Debt"]:
+            return amount
+        return -amount
+
+    if transaction_type == "Transfer":
+        return 0
+
+    return 0
+
+
+
 def load_personal_transaction_records():
     columns = [
         "date_added",
@@ -690,6 +742,8 @@ def load_personal_transaction_records():
         "description",
         "amount",
         "status",
+        "balance_applied",
+        "applied_date",
         "notes",
     ]
 
@@ -1897,6 +1951,7 @@ if page == "Personal Finance":
             "Monthly Budget",
             "Transactions",
             "Import Transactions CSV",
+            "Balance Manager",
         ]
     )
 
@@ -3691,6 +3746,8 @@ if page == "Personal Finance":
                             "description": description.strip(),
                             "amount": amount,
                             "status": status,
+                            "balance_applied": "No",
+                            "applied_date": "",
                             "notes": notes.strip(),
                         }
                     ]
@@ -4126,6 +4183,8 @@ if page == "Personal Finance":
                                 "description": preview_df["_description"],
                                 "amount": preview_df["_amount"],
                                 "status": preview_df["_status"],
+                                "balance_applied": "No",
+                                "applied_date": "",
                                 "notes": preview_df["_notes"],
                             }
                         )
@@ -4231,6 +4290,260 @@ if page == "Personal Finance":
         st.write("- For PayPal, Revolut or Monzo exports, map their account/category columns where available.")
         st.write("- For credit card exports, use the card account as the default account.")
         st.write("- Imported transactions do not automatically change your account balances yet. That comes in a later Personal Finance part.")
+
+
+
+
+    with personal_tabs[11]:
+        st.markdown("### Balance Manager")
+        st.subheader("Apply personal transactions to account balances safely")
+
+        account_records_for_balance = load_personal_account_records()
+        transaction_records_for_balance = load_personal_transaction_records()
+
+        st.warning(
+            "This page updates your saved account balances using transactions you have entered or imported. "
+            "Always preview the impact before applying changes."
+        )
+
+        if account_records_for_balance.empty:
+            st.error("No personal accounts found. Add accounts in the Accounts tab first.")
+        elif transaction_records_for_balance.empty:
+            st.error("No personal transactions found. Add or import transactions first.")
+        else:
+            transaction_records_for_balance["amount"] = pd.to_numeric(
+                transaction_records_for_balance["amount"],
+                errors="coerce"
+            ).fillna(0)
+
+            transaction_records_for_balance["transaction_date_dt"] = pd.to_datetime(
+                transaction_records_for_balance["transaction_date"],
+                errors="coerce"
+            )
+
+            if "balance_applied" not in transaction_records_for_balance.columns:
+                transaction_records_for_balance["balance_applied"] = "No"
+
+            transaction_records_for_balance["balance_applied"] = (
+                transaction_records_for_balance["balance_applied"]
+                .replace("", "No")
+                .fillna("No")
+            )
+
+            today = pd.Timestamp.today()
+
+            bm_col1, bm_col2 = st.columns(2)
+
+            with bm_col1:
+                selected_balance_month = st.selectbox(
+                    "Month to apply",
+                    list(range(1, 13)),
+                    index=int(today.month) - 1,
+                    format_func=lambda month_number: calendar.month_name[month_number],
+                    key="balance_manager_month_select",
+                )
+
+            with bm_col2:
+                selected_balance_year = st.number_input(
+                    "Year to apply",
+                    min_value=2020,
+                    max_value=2100,
+                    value=int(today.year),
+                    step=1,
+                    key="balance_manager_year_select",
+                )
+
+            month_transactions = transaction_records_for_balance[
+                (transaction_records_for_balance["transaction_date_dt"].dt.year == int(selected_balance_year))
+                & (transaction_records_for_balance["transaction_date_dt"].dt.month == int(selected_balance_month))
+            ].copy()
+
+            unapplied_transactions = month_transactions[
+                month_transactions["balance_applied"] != "Yes"
+            ].copy()
+
+            already_applied_transactions = month_transactions[
+                month_transactions["balance_applied"] == "Yes"
+            ].copy()
+
+            top_bm1, top_bm2, top_bm3 = st.columns(3)
+
+            top_bm1.metric("Transactions this month", len(month_transactions))
+            top_bm2.metric("Unapplied", len(unapplied_transactions))
+            top_bm3.metric("Already applied", len(already_applied_transactions))
+
+            if month_transactions.empty:
+                st.info("No transactions found for the selected month.")
+            elif unapplied_transactions.empty:
+                st.success("All transactions for this month have already been applied to balances.")
+            else:
+                preview_rows = []
+
+                for transaction_index, transaction_row in unapplied_transactions.iterrows():
+                    account_index = find_personal_account_index(
+                        account_records_for_balance,
+                        transaction_row["account"]
+                    )
+
+                    if account_index is None:
+                        preview_rows.append(
+                            {
+                                "transaction_index": transaction_index,
+                                "transaction_date": transaction_row["transaction_date"],
+                                "account": transaction_row["account"],
+                                "matched_account": "No match found",
+                                "transaction_type": transaction_row["transaction_type"],
+                                "category": transaction_row["category"],
+                                "description": transaction_row["description"],
+                                "amount": transaction_row["amount"],
+                                "current_balance": 0,
+                                "balance_impact": 0,
+                                "new_balance": 0,
+                                "can_apply": "No",
+                            }
+                        )
+                    else:
+                        matched_account = account_records_for_balance.loc[account_index]
+                        current_balance = float(matched_account["balance"])
+                        account_type = matched_account["account_type"]
+
+                        balance_impact = calculate_transaction_balance_impact(
+                            transaction_row["transaction_type"],
+                            account_type,
+                            transaction_row["amount"]
+                        )
+
+                        new_balance = max(current_balance + balance_impact, 0)
+
+                        preview_rows.append(
+                            {
+                                "transaction_index": transaction_index,
+                                "transaction_date": transaction_row["transaction_date"],
+                                "account": transaction_row["account"],
+                                "matched_account": f"{matched_account['provider']} - {matched_account['account_name']}",
+                                "transaction_type": transaction_row["transaction_type"],
+                                "category": transaction_row["category"],
+                                "description": transaction_row["description"],
+                                "amount": transaction_row["amount"],
+                                "current_balance": current_balance,
+                                "balance_impact": balance_impact,
+                                "new_balance": new_balance,
+                                "can_apply": "Yes",
+                            }
+                        )
+
+                preview_df = pd.DataFrame(preview_rows)
+
+                st.markdown("### Balance impact preview")
+
+                st.dataframe(preview_df, use_container_width=True)
+
+                unmatched_count = len(preview_df[preview_df["can_apply"] == "No"])
+
+                if unmatched_count > 0:
+                    st.error(
+                        f"{unmatched_count} transaction(s) could not be matched to an account. "
+                        "Edit the transaction account name or add the matching account first."
+                    )
+
+                total_income_impact = preview_df[
+                    (preview_df["transaction_type"] == "Income")
+                    & (preview_df["can_apply"] == "Yes")
+                ]["balance_impact"].sum()
+
+                total_expense_impact = preview_df[
+                    (preview_df["transaction_type"] == "Expense")
+                    & (preview_df["can_apply"] == "Yes")
+                ]["balance_impact"].sum()
+
+                impact_col1, impact_col2, impact_col3 = st.columns(3)
+
+                impact_col1.metric("Income impact", f"£{total_income_impact:,.2f}")
+                impact_col2.metric("Expense/debt impact", f"£{total_expense_impact:,.2f}")
+                impact_col3.metric("Net impact", f"£{(total_income_impact + total_expense_impact):,.2f}")
+
+                st.markdown("### Apply balance updates")
+
+                confirm_apply = st.checkbox(
+                    "I have checked the preview and want to apply matched transactions to balances.",
+                    key="confirm_apply_transactions_to_balances"
+                )
+
+                if st.button("Apply matched transactions to account balances"):
+                    if not confirm_apply:
+                        st.error("Tick the confirmation box before applying balance changes.")
+                    elif unmatched_count == len(preview_df):
+                        st.error("No matched transactions are available to apply.")
+                    else:
+                        applied_count = 0
+
+                        for _, preview_row in preview_df.iterrows():
+                            if preview_row["can_apply"] != "Yes":
+                                continue
+
+                            transaction_index = int(preview_row["transaction_index"])
+
+                            account_index = find_personal_account_index(
+                                account_records_for_balance,
+                                preview_row["account"]
+                            )
+
+                            if account_index is None:
+                                continue
+
+                            current_balance = float(account_records_for_balance.loc[account_index, "balance"])
+                            new_balance = max(current_balance + float(preview_row["balance_impact"]), 0)
+
+                            account_records_for_balance.loc[account_index, "balance"] = new_balance
+                            account_records_for_balance.loc[account_index, "last_updated"] = str(pd.Timestamp.today().date())
+
+                            transaction_records_for_balance.loc[transaction_index, "balance_applied"] = "Yes"
+                            transaction_records_for_balance.loc[transaction_index, "applied_date"] = str(pd.Timestamp.today().date())
+
+                            applied_count += 1
+
+                        save_personal_account_records(account_records_for_balance)
+
+                        transaction_records_for_balance = transaction_records_for_balance.drop(
+                            columns=["transaction_date_dt"],
+                            errors="ignore"
+                        )
+
+                        save_personal_transaction_records(transaction_records_for_balance)
+
+                        st.success(f"Applied {applied_count} transaction(s) to account balances.")
+                        st.rerun()
+
+            st.markdown("---")
+
+            st.markdown("### Already applied transactions")
+
+            if already_applied_transactions.empty:
+                st.info("No transactions have been applied for the selected month yet.")
+            else:
+                st.dataframe(
+                    already_applied_transactions[
+                        [
+                            "transaction_date",
+                            "transaction_type",
+                            "account",
+                            "category",
+                            "description",
+                            "amount",
+                            "balance_applied",
+                            "applied_date",
+                        ]
+                    ],
+                    use_container_width=True,
+                )
+
+            st.markdown("### Balance Manager rules")
+
+            st.write("- Income increases the selected account balance.")
+            st.write("- Expenses reduce current/savings/wallet balances.")
+            st.write("- Expenses on credit cards increase the amount owed.")
+            st.write("- Transfers are shown but do not change balances yet.")
+            st.write("- Transactions marked as applied are protected from being applied twice.")
 
 
 
