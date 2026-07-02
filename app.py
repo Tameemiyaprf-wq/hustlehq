@@ -233,6 +233,8 @@ PERSONAL_SAVINGS_GOAL_FILE = DATA_FOLDER / "personal_savings_goal_records.csv"
 PERSONAL_BUDGET_FILE = DATA_FOLDER / "personal_budget_records.csv"
 PERSONAL_TRANSACTION_FILE = DATA_FOLDER / "personal_transaction_records.csv"
 PERSONAL_NET_WORTH_FILE = DATA_FOLDER / "personal_net_worth_history.csv"
+PERSONAL_PLAN_FILE = DATA_FOLDER / "personal_plan_records.csv"
+PERSONAL_SETTINGS_FILE = DATA_FOLDER / "personal_settings_records.csv"
 
 
 
@@ -730,6 +732,219 @@ def calculate_transaction_balance_impact(transaction_type, account_type, amount)
         return 0
 
     return 0
+
+
+
+def load_personal_plan_records():
+    columns = [
+        "date_added",
+        "plan_type",
+        "plan_name",
+        "target_amount",
+        "current_amount",
+        "monthly_income",
+        "monthly_fixed_costs",
+        "monthly_debt_payment",
+        "monthly_savings",
+        "deadline",
+        "status",
+        "notes",
+    ]
+
+    if PERSONAL_PLAN_FILE.exists():
+        records = pd.read_csv(PERSONAL_PLAN_FILE)
+
+        for column in columns:
+            if column not in records.columns:
+                records[column] = ""
+
+        money_columns = [
+            "target_amount",
+            "current_amount",
+            "monthly_income",
+            "monthly_fixed_costs",
+            "monthly_debt_payment",
+            "monthly_savings",
+        ]
+
+        for column in money_columns:
+            records[column] = pd.to_numeric(records[column], errors="coerce").fillna(0)
+
+        return records[columns]
+
+    return pd.DataFrame(columns=columns)
+
+
+def save_personal_plan_records(records):
+    records.to_csv(PERSONAL_PLAN_FILE, index=False)
+
+
+def load_personal_settings_records():
+    columns = [
+        "setting_name",
+        "setting_value",
+        "last_updated",
+    ]
+
+    if PERSONAL_SETTINGS_FILE.exists():
+        records = pd.read_csv(PERSONAL_SETTINGS_FILE)
+
+        for column in columns:
+            if column not in records.columns:
+                records[column] = ""
+
+        return records[columns]
+
+    default_settings = pd.DataFrame(
+        [
+            {"setting_name": "weekly_review_day", "setting_value": "Sunday", "last_updated": str(pd.Timestamp.today().date())},
+            {"setting_name": "emergency_fund_target", "setting_value": "1000", "last_updated": str(pd.Timestamp.today().date())},
+            {"setting_name": "minimum_cash_buffer", "setting_value": "100", "last_updated": str(pd.Timestamp.today().date())},
+            {"setting_name": "debt_warning_threshold", "setting_value": "75", "last_updated": str(pd.Timestamp.today().date())},
+            {"setting_name": "subscription_warning_threshold", "setting_value": "100", "last_updated": str(pd.Timestamp.today().date())},
+        ]
+    )
+
+    save_personal_settings_records(default_settings)
+    return default_settings
+
+
+def save_personal_settings_records(records):
+    records.to_csv(PERSONAL_SETTINGS_FILE, index=False)
+
+
+def get_personal_setting(settings_records, setting_name, default_value):
+    if settings_records.empty:
+        return default_value
+
+    matching = settings_records[settings_records["setting_name"] == setting_name]
+
+    if matching.empty:
+        return default_value
+
+    return matching.iloc[-1]["setting_value"]
+
+
+def upsert_personal_setting(settings_records, setting_name, setting_value):
+    today = str(pd.Timestamp.today().date())
+
+    if settings_records.empty or setting_name not in settings_records["setting_name"].tolist():
+        new_setting = pd.DataFrame(
+            [
+                {
+                    "setting_name": setting_name,
+                    "setting_value": str(setting_value),
+                    "last_updated": today,
+                }
+            ]
+        )
+
+        settings_records = pd.concat([settings_records, new_setting], ignore_index=True)
+    else:
+        settings_records.loc[settings_records["setting_name"] == setting_name, "setting_value"] = str(setting_value)
+        settings_records.loc[settings_records["setting_name"] == setting_name, "last_updated"] = today
+
+    return settings_records
+
+
+def calculate_move_out_readiness(
+    current_savings,
+    target_deposit,
+    monthly_income,
+    monthly_fixed_costs,
+    monthly_debt_payment,
+):
+    monthly_left_after_core = monthly_income - monthly_fixed_costs - monthly_debt_payment
+    remaining_deposit = max(target_deposit - current_savings, 0)
+
+    months_to_target = 0
+
+    if monthly_left_after_core > 0 and remaining_deposit > 0:
+        months_to_target = int((remaining_deposit + monthly_left_after_core - 0.01) // monthly_left_after_core)
+
+    if remaining_deposit == 0:
+        months_to_target = 0
+
+    readiness_score = 0
+
+    if target_deposit > 0:
+        readiness_score += min((current_savings / target_deposit) * 50, 50)
+
+    if monthly_left_after_core >= 300:
+        readiness_score += 30
+    elif monthly_left_after_core >= 100:
+        readiness_score += 20
+    elif monthly_left_after_core > 0:
+        readiness_score += 10
+
+    if monthly_debt_payment <= monthly_income * 0.15 if monthly_income > 0 else False:
+        readiness_score += 20
+    elif monthly_debt_payment <= monthly_income * 0.25 if monthly_income > 0 else False:
+        readiness_score += 10
+
+    readiness_score = max(min(readiness_score, 100), 0)
+
+    return {
+        "monthly_left_after_core": monthly_left_after_core,
+        "remaining_deposit": remaining_deposit,
+        "months_to_target": months_to_target,
+        "readiness_score": readiness_score,
+    }
+
+
+def get_personal_completion_tracker(
+    account_records,
+    subscription_records,
+    transaction_records,
+    budget_records,
+    savings_goal_records,
+    net_worth_history,
+    plan_records,
+):
+    tracker_rows = [
+        {
+            "Area": "Accounts added",
+            "Complete": "Yes" if not account_records.empty else "No",
+            "Why it matters": "Needed for net worth, debt, savings and account tracking.",
+        },
+        {
+            "Area": "Subscriptions added",
+            "Complete": "Yes" if not subscription_records.empty else "No",
+            "Why it matters": "Needed for bills forecasting and subscription calendar.",
+        },
+        {
+            "Area": "Transactions added/imported",
+            "Complete": "Yes" if not transaction_records.empty else "No",
+            "Why it matters": "Needed for spending insights and budget comparison.",
+        },
+        {
+            "Area": "Monthly budget created",
+            "Complete": "Yes" if not budget_records.empty else "No",
+            "Why it matters": "Needed for planned vs actual money management.",
+        },
+        {
+            "Area": "Savings goals created",
+            "Complete": "Yes" if not savings_goal_records.empty else "No",
+            "Why it matters": "Needed for emergency fund, move-out and future goals.",
+        },
+        {
+            "Area": "Net worth snapshots saved",
+            "Complete": "Yes" if not net_worth_history.empty else "No",
+            "Why it matters": "Needed to track progress over time.",
+        },
+        {
+            "Area": "Personal plans created",
+            "Complete": "Yes" if not plan_records.empty else "No",
+            "Why it matters": "Needed for payday, move-out and larger planning.",
+        },
+    ]
+
+    tracker_df = pd.DataFrame(tracker_rows)
+
+    completed_count = len(tracker_df[tracker_df["Complete"] == "Yes"])
+    completion_percentage = completed_count / len(tracker_df) * 100
+
+    return tracker_df, completion_percentage
 
 
 
@@ -1829,9 +2044,11 @@ def submit_login_password():
     if password_attempt == saved_password:
         st.session_state["authenticated"] = True
         st.session_state["login_error"] = ""
+        st.session_state["login_success_message"] = "Login successful."
     else:
         st.session_state["authenticated"] = False
         st.session_state["login_error"] = "Incorrect password."
+        st.session_state["login_success_message"] = ""
 
 
 def check_password():
@@ -1840,6 +2057,9 @@ def check_password():
 
     if "login_error" not in st.session_state:
         st.session_state["login_error"] = ""
+
+    if "login_success_message" not in st.session_state:
+        st.session_state["login_success_message"] = ""
 
     if st.session_state["authenticated"]:
         return True
@@ -1851,19 +2071,23 @@ def check_password():
         "Password",
         type="password",
         key="hustlehq_password_attempt",
-        placeholder="Enter password and press Enter",
+        placeholder="Type password, then press Enter",
         on_change=submit_login_password,
     )
 
-    if st.button("Log in", use_container_width=True):
+    if st.session_state.get("authenticated"):
+        st.rerun()
+
+    if st.button("Log in", use_container_width=True, type="primary"):
         submit_login_password()
+
         if st.session_state.get("authenticated"):
             st.rerun()
 
     if st.session_state.get("login_error"):
         st.error(st.session_state["login_error"])
 
-    st.info("Tip: type your password and press Enter.")
+    st.info("Tip: click the password box, type the password, then press Enter. If your browser does not submit it, use the Log in button.")
     return False
 
 
@@ -2604,6 +2828,8 @@ if page == "Personal Finance":
             "Intelligence",
             "Reports",
             "Command Centre",
+            "Planning Centre",
+            "Personal Settings",
         ]
     )
 
@@ -6459,6 +6685,559 @@ if page == "Personal Finance":
             st.checkbox(item, key=f"command_centre_check_{item}")
 
         st.caption("These checklist ticks are temporary for the session. Persistent checklists can be added later.")
+
+
+
+
+    with personal_tabs[16]:
+        st.markdown("### Planning Centre")
+        st.subheader("Payday, move-out, savings and long-term personal money planning")
+
+        account_records_p = load_personal_account_records()
+        subscription_records_p = load_personal_subscription_records()
+        transaction_records_p = load_personal_transaction_records()
+        budget_records_p = load_personal_budget_records()
+        savings_goal_records_p = load_personal_savings_goal_records()
+        net_worth_history_p = load_personal_net_worth_history()
+        plan_records_p = load_personal_plan_records()
+
+        net_worth_p = calculate_personal_net_worth(account_records_p)
+
+        current_cash_p = float(net_worth_p["current_cash"])
+        savings_p = float(net_worth_p["savings"])
+        investments_p = float(net_worth_p["investments"])
+        debt_p = float(net_worth_p["debts"])
+        net_worth_total_p = float(net_worth_p["net_worth"])
+
+        st.markdown("### Planning overview")
+
+        plan_col1, plan_col2, plan_col3, plan_col4 = st.columns(4)
+
+        plan_col1.metric("Cash", f"£{current_cash_p:,.2f}")
+        plan_col2.metric("Savings", f"£{savings_p:,.2f}")
+        plan_col3.metric("Debt", f"£{debt_p:,.2f}")
+        plan_col4.metric("Net worth", f"£{net_worth_total_p:,.2f}")
+
+        planning_tabs = st.tabs(
+            [
+                "Payday Planner",
+                "Move-out Readiness",
+                "Connection Roadmap",
+                "Completion Tracker",
+                "Saved Plans",
+            ]
+        )
+
+        with planning_tabs[0]:
+            st.markdown("#### Payday Planner")
+
+            st.info("Use this to decide what your next payday should do before the money disappears.")
+
+            with st.form("personal_payday_plan_form"):
+                payday_col1, payday_col2 = st.columns(2)
+
+                with payday_col1:
+                    plan_name = st.text_input(
+                        "Plan name",
+                        value="Next payday plan",
+                        key="payday_plan_name"
+                    )
+
+                    expected_payday_income = st.number_input(
+                        "Expected payday income (£)",
+                        min_value=0.0,
+                        step=25.0,
+                        value=0.0,
+                        key="payday_income"
+                    )
+
+                    fixed_costs = st.number_input(
+                        "Fixed costs before next payday (£)",
+                        min_value=0.0,
+                        step=10.0,
+                        value=0.0,
+                        key="payday_fixed_costs"
+                    )
+
+                with payday_col2:
+                    debt_payment = st.number_input(
+                        "Debt payment planned (£)",
+                        min_value=0.0,
+                        step=10.0,
+                        value=0.0,
+                        key="payday_debt_payment"
+                    )
+
+                    savings_payment = st.number_input(
+                        "Savings planned (£)",
+                        min_value=0.0,
+                        step=10.0,
+                        value=0.0,
+                        key="payday_savings_payment"
+                    )
+
+                    payday_deadline = st.date_input(
+                        "Plan date",
+                        key="payday_plan_date"
+                    )
+
+                payday_notes = st.text_area(
+                    "Payday notes",
+                    placeholder="Example: pay Amex first, keep buffer, move savings to Zopa.",
+                    key="payday_plan_notes"
+                )
+
+                save_payday_plan = st.form_submit_button("Save payday plan")
+
+            payday_leftover = expected_payday_income - fixed_costs - debt_payment - savings_payment
+
+            payday_preview1, payday_preview2, payday_preview3, payday_preview4 = st.columns(4)
+
+            payday_preview1.metric("Income", f"£{expected_payday_income:,.2f}")
+            payday_preview2.metric("Fixed costs", f"£{fixed_costs:,.2f}")
+            payday_preview3.metric("Debt + savings", f"£{(debt_payment + savings_payment):,.2f}")
+            payday_preview4.metric("Leftover", f"£{payday_leftover:,.2f}")
+
+            if expected_payday_income <= 0:
+                st.warning("Add expected payday income.")
+            elif payday_leftover < 0:
+                st.error("This payday plan goes negative.")
+            elif payday_leftover < 50:
+                st.warning("This payday plan leaves a very small buffer.")
+            else:
+                st.success("This payday plan leaves a positive buffer.")
+
+            if save_payday_plan:
+                if expected_payday_income <= 0:
+                    st.error("Add payday income before saving.")
+                else:
+                    new_plan = pd.DataFrame(
+                        [
+                            {
+                                "date_added": str(pd.Timestamp.today().date()),
+                                "plan_type": "Payday Plan",
+                                "plan_name": plan_name.strip(),
+                                "target_amount": 0,
+                                "current_amount": 0,
+                                "monthly_income": expected_payday_income,
+                                "monthly_fixed_costs": fixed_costs,
+                                "monthly_debt_payment": debt_payment,
+                                "monthly_savings": savings_payment,
+                                "deadline": str(payday_deadline),
+                                "status": "Active",
+                                "notes": payday_notes.strip(),
+                            }
+                        ]
+                    )
+
+                    plan_records_p = pd.concat([plan_records_p, new_plan], ignore_index=True)
+                    save_personal_plan_records(plan_records_p)
+
+                    st.success("Payday plan saved.")
+                    st.rerun()
+
+        with planning_tabs[1]:
+            st.markdown("#### Move-out Readiness")
+
+            st.info("Use this as a rough readiness planner. It is not a rental affordability guarantee.")
+
+            with st.form("move_out_readiness_form"):
+                move_col1, move_col2 = st.columns(2)
+
+                with move_col1:
+                    move_plan_name = st.text_input(
+                        "Move-out plan name",
+                        value="Move-out fund",
+                        key="move_plan_name"
+                    )
+
+                    target_deposit = st.number_input(
+                        "Target upfront money needed (£)",
+                        min_value=0.0,
+                        step=100.0,
+                        value=3000.0,
+                        key="move_target_deposit"
+                    )
+
+                    current_move_savings = st.number_input(
+                        "Current move-out savings (£)",
+                        min_value=0.0,
+                        step=50.0,
+                        value=float(savings_p),
+                        key="move_current_savings"
+                    )
+
+                with move_col2:
+                    monthly_income = st.number_input(
+                        "Expected monthly income (£)",
+                        min_value=0.0,
+                        step=50.0,
+                        value=0.0,
+                        key="move_monthly_income"
+                    )
+
+                    monthly_fixed_costs = st.number_input(
+                        "Expected monthly fixed costs (£)",
+                        min_value=0.0,
+                        step=50.0,
+                        value=0.0,
+                        key="move_fixed_costs"
+                    )
+
+                    monthly_debt_payment = st.number_input(
+                        "Expected monthly debt payments (£)",
+                        min_value=0.0,
+                        step=10.0,
+                        value=0.0,
+                        key="move_debt_payment"
+                    )
+
+                move_deadline = st.date_input(
+                    "Move-out target date",
+                    key="move_target_date"
+                )
+
+                move_notes = st.text_area(
+                    "Move-out notes",
+                    placeholder="Example: target flat deposit, first month rent, emergency buffer.",
+                    key="move_notes"
+                )
+
+                save_move_plan = st.form_submit_button("Save move-out plan")
+
+            readiness = calculate_move_out_readiness(
+                current_savings=current_move_savings,
+                target_deposit=target_deposit,
+                monthly_income=monthly_income,
+                monthly_fixed_costs=monthly_fixed_costs,
+                monthly_debt_payment=monthly_debt_payment,
+            )
+
+            move_metric1, move_metric2, move_metric3, move_metric4 = st.columns(4)
+
+            move_metric1.metric("Readiness score", f"{readiness['readiness_score']:,.0f}/100")
+            move_metric2.metric("Remaining target", f"£{readiness['remaining_deposit']:,.2f}")
+            move_metric3.metric("Monthly left after core", f"£{readiness['monthly_left_after_core']:,.2f}")
+            move_metric4.metric("Months to target", readiness["months_to_target"])
+
+            st.progress(readiness["readiness_score"] / 100)
+
+            if readiness["readiness_score"] >= 80:
+                st.success("Move-out readiness is strong based on the numbers entered.")
+            elif readiness["readiness_score"] >= 50:
+                st.warning("Move-out readiness is developing, but still needs a stronger buffer.")
+            else:
+                st.error("Move-out readiness is low. Build savings/income stability first.")
+
+            if save_move_plan:
+                new_move_plan = pd.DataFrame(
+                    [
+                        {
+                            "date_added": str(pd.Timestamp.today().date()),
+                            "plan_type": "Move-out Plan",
+                            "plan_name": move_plan_name.strip(),
+                            "target_amount": target_deposit,
+                            "current_amount": current_move_savings,
+                            "monthly_income": monthly_income,
+                            "monthly_fixed_costs": monthly_fixed_costs,
+                            "monthly_debt_payment": monthly_debt_payment,
+                            "monthly_savings": max(readiness["monthly_left_after_core"], 0),
+                            "deadline": str(move_deadline),
+                            "status": "Active",
+                            "notes": move_notes.strip(),
+                        }
+                    ]
+                )
+
+                plan_records_p = pd.concat([plan_records_p, new_move_plan], ignore_index=True)
+                save_personal_plan_records(plan_records_p)
+
+                st.success("Move-out plan saved.")
+                st.rerun()
+
+        with planning_tabs[2]:
+            st.markdown("#### Account Connection Roadmap")
+
+            st.warning(
+                "Live account connections are not active yet. This roadmap keeps track of which providers should be connected later."
+            )
+
+            connection_rows = [
+                {
+                    "Provider": "NatWest",
+                    "Likely connection route": "Open Banking",
+                    "Priority": "High",
+                    "Current workaround": "Manual balance + bank CSV import",
+                    "Status": "Planned",
+                },
+                {
+                    "Provider": "Santander",
+                    "Likely connection route": "Open Banking",
+                    "Priority": "High",
+                    "Current workaround": "Manual balance + bank CSV import",
+                    "Status": "Planned",
+                },
+                {
+                    "Provider": "American Express",
+                    "Likely connection route": "Provider export / possible aggregator",
+                    "Priority": "High",
+                    "Current workaround": "Manual balance + CSV import",
+                    "Status": "Planned",
+                },
+                {
+                    "Provider": "Zopa",
+                    "Likely connection route": "Open Banking if supported",
+                    "Priority": "Medium",
+                    "Current workaround": "Manual savings balance",
+                    "Status": "Planned",
+                },
+                {
+                    "Provider": "Trading 212",
+                    "Likely connection route": "Manual export / possible platform API later",
+                    "Priority": "Medium",
+                    "Current workaround": "Manual ISA balance",
+                    "Status": "Planned",
+                },
+                {
+                    "Provider": "PayPal",
+                    "Likely connection route": "PayPal export/API later",
+                    "Priority": "Medium",
+                    "Current workaround": "CSV import",
+                    "Status": "Planned",
+                },
+                {
+                    "Provider": "AJ Bell Dodl",
+                    "Likely connection route": "Manual export / statement import",
+                    "Priority": "Medium",
+                    "Current workaround": "Manual LISA/pension balance",
+                    "Status": "Planned",
+                },
+                {
+                    "Provider": "Monzo/Revolut/Lloyds/Nationwide/Halifax",
+                    "Likely connection route": "Open Banking",
+                    "Priority": "Optional",
+                    "Current workaround": "Manual balance + CSV import",
+                    "Status": "Planned",
+                },
+            ]
+
+            connection_df = pd.DataFrame(connection_rows)
+
+            st.dataframe(connection_df, use_container_width=True)
+
+            st.download_button(
+                "Download connection roadmap CSV",
+                data=connection_df.to_csv(index=False).encode("utf-8"),
+                file_name="hustlehq_personal_connection_roadmap.csv",
+                mime="text/csv",
+            )
+
+        with planning_tabs[3]:
+            st.markdown("#### Completion Tracker")
+
+            completion_df, completion_percentage = get_personal_completion_tracker(
+                account_records_p,
+                subscription_records_p,
+                transaction_records_p,
+                budget_records_p,
+                savings_goal_records_p,
+                net_worth_history_p,
+                plan_records_p,
+            )
+
+            st.metric("Personal Finance build/data completion", f"{completion_percentage:,.1f}%")
+            st.progress(completion_percentage / 100)
+
+            st.dataframe(completion_df, use_container_width=True)
+
+            if completion_percentage >= 85:
+                st.success("Personal Finance section is now highly usable.")
+            elif completion_percentage >= 60:
+                st.warning("Personal Finance section is usable but still missing useful records.")
+            else:
+                st.error("Personal Finance section needs more records before insights become reliable.")
+
+        with planning_tabs[4]:
+            st.markdown("#### Saved Plans")
+
+            if plan_records_p.empty:
+                st.warning("No personal plans saved yet.")
+            else:
+                st.dataframe(plan_records_p, use_container_width=True)
+
+                plan_delete_options = [
+                    f"{index} - {row['plan_type']} - {row['plan_name']} - {row['status']}"
+                    for index, row in plan_records_p.iterrows()
+                ]
+
+                selected_plan_delete = st.selectbox(
+                    "Choose plan to delete",
+                    plan_delete_options,
+                    key="personal_plan_delete_select"
+                )
+
+                if st.button("Delete selected plan"):
+                    selected_plan_delete_index = int(selected_plan_delete.split(" - ")[0])
+                    plan_records_p = plan_records_p.drop(index=selected_plan_delete_index).reset_index(drop=True)
+                    save_personal_plan_records(plan_records_p)
+
+                    st.success("Plan deleted.")
+                    st.rerun()
+
+                st.download_button(
+                    "Download personal plans CSV",
+                    data=plan_records_p.to_csv(index=False).encode("utf-8"),
+                    file_name="hustlehq_personal_plans.csv",
+                    mime="text/csv",
+                )
+
+
+    with personal_tabs[17]:
+        st.markdown("### Personal Settings")
+        st.subheader("Personal finance preferences, thresholds and data tools")
+
+        settings_records_s = load_personal_settings_records()
+
+        st.markdown("### Current settings")
+
+        st.dataframe(settings_records_s, use_container_width=True)
+
+        st.markdown("### Update personal finance settings")
+
+        current_weekly_review_day = get_personal_setting(settings_records_s, "weekly_review_day", "Sunday")
+        current_emergency_fund_target = float(get_personal_setting(settings_records_s, "emergency_fund_target", "1000"))
+        current_minimum_cash_buffer = float(get_personal_setting(settings_records_s, "minimum_cash_buffer", "100"))
+        current_debt_warning_threshold = float(get_personal_setting(settings_records_s, "debt_warning_threshold", "75"))
+        current_subscription_warning_threshold = float(get_personal_setting(settings_records_s, "subscription_warning_threshold", "100"))
+
+        with st.form("personal_settings_update_form"):
+            setting_col1, setting_col2 = st.columns(2)
+
+            with setting_col1:
+                weekly_review_day = st.selectbox(
+                    "Weekly review day",
+                    [
+                        "Monday",
+                        "Tuesday",
+                        "Wednesday",
+                        "Thursday",
+                        "Friday",
+                        "Saturday",
+                        "Sunday",
+                    ],
+                    index=[
+                        "Monday",
+                        "Tuesday",
+                        "Wednesday",
+                        "Thursday",
+                        "Friday",
+                        "Saturday",
+                        "Sunday",
+                    ].index(current_weekly_review_day) if current_weekly_review_day in [
+                        "Monday",
+                        "Tuesday",
+                        "Wednesday",
+                        "Thursday",
+                        "Friday",
+                        "Saturday",
+                        "Sunday",
+                    ] else 6,
+                )
+
+                emergency_fund_target = st.number_input(
+                    "Emergency fund target (£)",
+                    min_value=0.0,
+                    step=50.0,
+                    value=current_emergency_fund_target,
+                )
+
+                minimum_cash_buffer = st.number_input(
+                    "Minimum cash buffer warning (£)",
+                    min_value=0.0,
+                    step=25.0,
+                    value=current_minimum_cash_buffer,
+                )
+
+            with setting_col2:
+                debt_warning_threshold = st.number_input(
+                    "Credit utilisation warning threshold (%)",
+                    min_value=0.0,
+                    max_value=100.0,
+                    step=5.0,
+                    value=current_debt_warning_threshold,
+                )
+
+                subscription_warning_threshold = st.number_input(
+                    "Monthly subscription warning threshold (£)",
+                    min_value=0.0,
+                    step=10.0,
+                    value=current_subscription_warning_threshold,
+                )
+
+            save_settings = st.form_submit_button("Save personal settings")
+
+        if save_settings:
+            settings_records_s = upsert_personal_setting(settings_records_s, "weekly_review_day", weekly_review_day)
+            settings_records_s = upsert_personal_setting(settings_records_s, "emergency_fund_target", emergency_fund_target)
+            settings_records_s = upsert_personal_setting(settings_records_s, "minimum_cash_buffer", minimum_cash_buffer)
+            settings_records_s = upsert_personal_setting(settings_records_s, "debt_warning_threshold", debt_warning_threshold)
+            settings_records_s = upsert_personal_setting(settings_records_s, "subscription_warning_threshold", subscription_warning_threshold)
+
+            save_personal_settings_records(settings_records_s)
+
+            st.success("Personal finance settings saved.")
+            st.rerun()
+
+        st.markdown("---")
+
+        st.markdown("### Backup reminder")
+
+        st.info(
+            "Use Command Centre to download your personal finance backup ZIP weekly. "
+            "This section uses CSV storage, so backups matter."
+        )
+
+        st.markdown("### Data reset tools")
+
+        st.error(
+            "Danger zone. These buttons permanently clear selected personal finance files from the app data folder. "
+            "Download a backup before using them."
+        )
+
+        reset_options = {
+            "Personal accounts": PERSONAL_ACCOUNT_FILE,
+            "Personal subscriptions": PERSONAL_SUBSCRIPTION_FILE,
+            "Personal transactions": PERSONAL_TRANSACTION_FILE,
+            "Personal budgets": PERSONAL_BUDGET_FILE,
+            "Personal savings goals": PERSONAL_SAVINGS_GOAL_FILE,
+            "Personal net worth history": PERSONAL_NET_WORTH_FILE,
+            "Personal plans": PERSONAL_PLAN_FILE,
+            "Personal settings": PERSONAL_SETTINGS_FILE,
+        }
+
+        selected_reset_area = st.selectbox(
+            "Choose personal finance data area to reset",
+            list(reset_options.keys()),
+            key="personal_reset_area_select"
+        )
+
+        confirm_reset = st.checkbox(
+            "I understand this will delete the selected personal finance data file.",
+            key="confirm_personal_data_reset"
+        )
+
+        if st.button("Reset selected personal finance data"):
+            if not confirm_reset:
+                st.error("Tick the confirmation box before resetting data.")
+            else:
+                selected_file = reset_options[selected_reset_area]
+
+                if selected_file.exists():
+                    selected_file.unlink()
+                    st.success(f"{selected_reset_area} data reset.")
+                    st.rerun()
+                else:
+                    st.info(f"No file existed for {selected_reset_area}.")
 
 
 
