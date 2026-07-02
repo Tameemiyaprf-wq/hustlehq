@@ -1727,6 +1727,7 @@ if page == "Personal Finance":
             "Dashboard",
             "Accounts",
             "Savings",
+            "Debt Manager",
             "Subscriptions",
             "Bills Forecast",
             "Subscription Calendar",
@@ -2144,6 +2145,197 @@ if page == "Personal Finance":
         )
 
     with personal_tabs[3]:
+        st.markdown("### Debt Manager")
+        st.subheader("Track credit cards, loans, repayments and available credit")
+
+        if account_records.empty:
+            st.warning("No personal accounts added yet. Add credit cards or loans in the Accounts tab first.")
+        else:
+            debt_records = account_records[
+                account_records["account_type"].isin(["Credit Card", "Loan/Debt"])
+            ].copy()
+
+            if debt_records.empty:
+                st.warning("No debt accounts found. Add a credit card or loan in the Accounts tab.")
+                st.info("Use account type: Credit Card or Loan/Debt.")
+            else:
+                debt_records["balance"] = pd.to_numeric(
+                    debt_records["balance"],
+                    errors="coerce"
+                ).fillna(0)
+
+                debt_records["credit_limit"] = pd.to_numeric(
+                    debt_records["credit_limit"],
+                    errors="coerce"
+                ).fillna(0)
+
+                credit_card_records = debt_records[
+                    debt_records["account_type"] == "Credit Card"
+                ].copy()
+
+                total_debt = debt_records["balance"].sum()
+                total_credit_limit = credit_card_records["credit_limit"].sum() if not credit_card_records.empty else 0
+                total_credit_used = credit_card_records["balance"].sum() if not credit_card_records.empty else 0
+                available_credit = total_credit_limit - total_credit_used
+
+                credit_utilisation = 0
+
+                if total_credit_limit > 0:
+                    credit_utilisation = (total_credit_used / total_credit_limit) * 100
+
+                debt_col1, debt_col2, debt_col3, debt_col4 = st.columns(4)
+
+                debt_col1.metric("Total debt", f"£{total_debt:,.2f}")
+                debt_col2.metric("Credit used", f"£{total_credit_used:,.2f}")
+                debt_col3.metric("Available credit", f"£{available_credit:,.2f}")
+                debt_col4.metric("Credit utilisation", f"{credit_utilisation:,.1f}%")
+
+                if credit_utilisation >= 90:
+                    st.error("Credit utilisation is very high. This can make your finances feel tight and may affect your credit profile.")
+                elif credit_utilisation >= 75:
+                    st.error("Credit utilisation is high. Prioritise reducing credit card balances where possible.")
+                elif credit_utilisation >= 30:
+                    st.warning("Credit utilisation is moderate. Keep monitoring it and avoid relying on the card for normal spending.")
+                elif total_credit_limit > 0:
+                    st.success("Credit utilisation is currently in a healthier range.")
+
+                st.markdown("### Debt accounts")
+
+                debt_display = debt_records.copy()
+
+                debt_display["available_credit"] = debt_display["credit_limit"] - debt_display["balance"]
+
+                debt_display["utilisation_%"] = debt_display.apply(
+                    lambda row: (row["balance"] / row["credit_limit"] * 100) if row["credit_limit"] > 0 and row["account_type"] == "Credit Card" else 0,
+                    axis=1
+                )
+
+                st.dataframe(
+                    debt_display[
+                        [
+                            "provider",
+                            "account_name",
+                            "account_type",
+                            "balance",
+                            "credit_limit",
+                            "available_credit",
+                            "utilisation_%",
+                            "status",
+                            "last_updated",
+                            "notes",
+                        ]
+                    ],
+                    use_container_width=True,
+                )
+
+                st.markdown("### Debt by provider")
+
+                debt_by_provider = (
+                    debt_records
+                    .groupby("provider", as_index=False)["balance"]
+                    .sum()
+                    .sort_values("balance", ascending=False)
+                )
+
+                st.dataframe(debt_by_provider, use_container_width=True)
+
+                st.markdown("### Repayment simulator")
+
+                sim_col1, sim_col2 = st.columns(2)
+
+                with sim_col1:
+                    simulator_debt = st.number_input(
+                        "Debt balance to simulate (£)",
+                        min_value=0.0,
+                        step=10.0,
+                        value=float(total_debt)
+                    )
+
+                with sim_col2:
+                    monthly_payment = st.number_input(
+                        "Monthly repayment (£)",
+                        min_value=0.0,
+                        step=10.0,
+                        value=50.0
+                    )
+
+                if simulator_debt > 0 and monthly_payment > 0:
+                    months_to_clear = int((simulator_debt + monthly_payment - 0.01) // monthly_payment)
+                    years_to_clear = months_to_clear / 12
+
+                    sim_a, sim_b = st.columns(2)
+
+                    sim_a.metric("Months to clear", months_to_clear)
+                    sim_b.metric("Years to clear", f"{years_to_clear:,.1f}")
+
+                    st.info(
+                        "This is a simple repayment estimate and does not include interest, fees, Plan It instalment structures, "
+                        "minimum-payment rules or new spending."
+                    )
+                else:
+                    st.warning("Enter a debt balance and monthly payment above £0 to use the simulator.")
+
+                st.markdown("### Log a debt repayment")
+
+                debt_options = [
+                    f"{index} - {row['provider']} - {row['account_name']} - £{float(row['balance']):,.2f}"
+                    for index, row in account_records.iterrows()
+                    if row["account_type"] in ["Credit Card", "Loan/Debt"]
+                ]
+
+                if not debt_options:
+                    st.info("No debt accounts available for repayment logging.")
+                else:
+                    selected_debt = st.selectbox(
+                        "Choose debt account",
+                        debt_options,
+                        key="personal_debt_repayment_select"
+                    )
+
+                    repayment_amount = st.number_input(
+                        "Repayment amount (£)",
+                        min_value=0.0,
+                        step=10.0,
+                        value=0.0,
+                        key="personal_debt_repayment_amount"
+                    )
+
+                    if st.button("Apply repayment to selected debt"):
+                        if repayment_amount <= 0:
+                            st.error("Enter a repayment amount above £0.")
+                        else:
+                            selected_debt_index = int(selected_debt.split(" - ")[0])
+                            current_balance = float(account_records.loc[selected_debt_index, "balance"])
+                            new_balance = max(current_balance - repayment_amount, 0)
+
+                            account_records.loc[selected_debt_index, "balance"] = new_balance
+                            account_records.loc[selected_debt_index, "last_updated"] = str(pd.Timestamp.today().date())
+
+                            save_personal_account_records(account_records)
+
+                            st.success(
+                                f"Repayment applied. New balance: £{new_balance:,.2f}."
+                            )
+                            st.rerun()
+
+                st.markdown("### Debt management notes")
+
+                st.write("- For credit cards, enter the amount owed as the balance.")
+                st.write("- For American Express Plan It, you can either track the full Amex balance or create a separate Loan/Debt account called Amex Plan It.")
+                st.write("- Use the repayment logger after you make a payment so your net worth updates.")
+                st.write("- Keep credit limits updated so utilisation is accurate.")
+
+                st.download_button(
+                    "Download debt accounts CSV",
+                    data=debt_display.to_csv(index=False).encode("utf-8"),
+                    file_name="hustlehq_personal_debt_accounts.csv",
+                    mime="text/csv",
+                )
+
+
+
+
+    with personal_tabs[4]:
         st.markdown("### Add subscription")
 
         account_options = []
@@ -2344,7 +2536,7 @@ if page == "Personal Finance":
                 mime="text/csv",
             )
 
-    with personal_tabs[4]:
+    with personal_tabs[5]:
         st.markdown("### Bills Forecast")
         st.subheader("See what is coming out, when, and from which account")
 
@@ -2575,7 +2767,7 @@ if page == "Personal Finance":
         )
 
 
-    with personal_tabs[5]:
+    with personal_tabs[6]:
         st.markdown("### Subscription calendar")
 
         if subscription_records.empty:
