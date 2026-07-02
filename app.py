@@ -17,6 +17,94 @@ st.set_page_config(
     layout="wide"
 )
 
+st.markdown(
+    """
+    <style>
+    .hustlehq-mobile-note {
+        background: #ECFDF5;
+        border: 1px solid #A7F3D0;
+        border-radius: 14px;
+        padding: 14px 16px;
+        margin: 12px 0 18px 0;
+        color: #064E3B;
+        font-size: 0.95rem;
+        line-height: 1.45;
+    }
+
+    .hustlehq-action-card {
+        background: #FFFFFF;
+        border: 1px solid #E2E8F0;
+        border-radius: 16px;
+        padding: 16px;
+        margin-bottom: 12px;
+        box-shadow: 0 1px 3px rgba(15, 23, 42, 0.08);
+    }
+
+    .hustlehq-action-card h4 {
+        margin-top: 0;
+        margin-bottom: 6px;
+        color: #0B1F33;
+    }
+
+    .hustlehq-action-card p {
+        margin-bottom: 0;
+        color: #475569;
+        font-size: 0.95rem;
+    }
+
+    @media (max-width: 768px) {
+        .block-container {
+            padding-top: 1.2rem;
+            padding-left: 1rem;
+            padding-right: 1rem;
+        }
+
+        h1 {
+            font-size: 1.65rem !important;
+            line-height: 1.2 !important;
+        }
+
+        h2 {
+            font-size: 1.35rem !important;
+        }
+
+        h3 {
+            font-size: 1.15rem !important;
+        }
+
+        div[data-testid="stMetric"] {
+            background: #FFFFFF;
+            border: 1px solid #E2E8F0;
+            border-radius: 14px;
+            padding: 12px;
+            box-shadow: 0 1px 2px rgba(15, 23, 42, 0.06);
+        }
+
+        div[data-testid="stMetricLabel"] {
+            font-size: 0.78rem !important;
+        }
+
+        div[data-testid="stMetricValue"] {
+            font-size: 1.25rem !important;
+        }
+
+        button[kind="primary"], .stButton button {
+            width: 100%;
+            border-radius: 12px;
+        }
+
+        .stDownloadButton button {
+            width: 100%;
+            border-radius: 12px;
+        }
+    }
+    </style>
+    """,
+    unsafe_allow_html=True,
+)
+
+
+
 
 # =========================
 # HUSTLEHQ POLISH CSS
@@ -601,6 +689,7 @@ page = st.sidebar.radio(
     "Navigation",
     [
         "Dashboard",
+        "Mobile Quick Guide",
         "Add Income",
         "Import Income CSV",
         "Add Expense",
@@ -1094,6 +1183,83 @@ st.markdown(
     """,
     unsafe_allow_html=True
 )
+
+
+if page == "Mobile Quick Guide":
+    st.title("Mobile Quick Guide")
+    st.subheader("Use HustleHQ faster from your phone")
+
+    st.markdown(
+        """
+        <div class="hustlehq-mobile-note">
+        HustleHQ works best when you use quick entry pages on mobile and bigger review pages on laptop.
+        Use your phone for adding income, expenses, receipts and quick checks. Use your laptop for exports,
+        PDF reports, backups and tax-year reviews.
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    st.markdown("### Best pages to use on your phone")
+
+    st.markdown(
+        """
+        <div class="hustlehq-action-card">
+            <h4>Add Income</h4>
+            <p>Use this straight after a payment, Vinted sale, brand payment, transcription payout or client payment.</p>
+        </div>
+        <div class="hustlehq-action-card">
+            <h4>Add Expense</h4>
+            <p>Use this immediately after buying postage, packaging, software, stock, travel or supplies.</p>
+        </div>
+        <div class="hustlehq-action-card">
+            <h4>Project Tracker</h4>
+            <p>Use this to quickly log a new idea, paid task, app project, client job or side-hustle opportunity.</p>
+        </div>
+        <div class="hustlehq-action-card">
+            <h4>Client / Contact Tracker</h4>
+            <p>Use this after speaking to a brand, client, assistant, buyer, supplier or collaborator.</p>
+        </div>
+        <div class="hustlehq-action-card">
+            <h4>Payment Chase</h4>
+            <p>Use this when checking unpaid invoices or preparing a reminder message.</p>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    st.markdown("### Best pages to use on laptop")
+
+    laptop_pages = pd.DataFrame(
+        [
+            {"Page": "HMRC Export", "Best use": "Download structured tax-year records."},
+            {"Page": "PDF Report", "Best use": "Create polished summaries."},
+            {"Page": "Data Backup", "Best use": "Download full backups."},
+            {"Page": "Restore Backup", "Best use": "Restore records carefully."},
+            {"Page": "Tax-Year Summary", "Best use": "Review profit, expenses and evidence quality."},
+            {"Page": "Import Income CSV", "Best use": "Upload platform exports or bank CSVs."},
+            {"Page": "Import Expense CSV", "Best use": "Upload bank or receipt CSVs."},
+        ]
+    )
+
+    st.dataframe(laptop_pages, use_container_width=True)
+
+    st.markdown("### Mobile workflow")
+
+    st.write("1. Add money in as soon as it arrives.")
+    st.write("2. Add costs as soon as you pay them.")
+    st.write("3. Upload/import CSVs weekly instead of typing everything manually.")
+    st.write("4. Check the dashboard every few days.")
+    st.write("5. Download a backup at least once a week.")
+    st.write("6. Do serious tax/export checks on laptop.")
+
+    st.markdown("### Phone shortcut tip")
+
+    st.info(
+        "Open the deployed app on your iPhone, tap Share, then Add to Home Screen. "
+        "This makes HustleHQ feel more like a normal app."
+    )
+
 
 
 if page == "Dashboard":
