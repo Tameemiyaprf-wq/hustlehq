@@ -764,6 +764,30 @@ def get_subscription_colour_hex(colour_name):
     return colour_map.get(colour_name, "#10B981")
 
 
+def move_subscription_date_forward(current_date_value):
+    current_date = pd.to_datetime(current_date_value, errors="coerce")
+
+    if pd.isna(current_date):
+        return str(pd.Timestamp.today().date())
+
+    year = int(current_date.year)
+    month = int(current_date.month)
+    day = int(current_date.day)
+
+    if month == 12:
+        next_year = year + 1
+        next_month = 1
+    else:
+        next_year = year
+        next_month = month + 1
+
+    last_day_next_month = calendar.monthrange(next_year, next_month)[1]
+    safe_day = min(day, last_day_next_month)
+
+    return str(date(next_year, next_month, safe_day))
+
+
+
 def render_subscription_calendar(subscription_records, selected_year, selected_month):
     active_subscriptions = subscription_records[
         subscription_records["status"] == "Active"
@@ -1484,6 +1508,75 @@ st.markdown(
 
 
 # =========================
+st.markdown(
+    """
+    <style>
+    .pf-dashboard-card {
+        background: #FFFFFF;
+        border: 1px solid #E2E8F0;
+        border-radius: 18px;
+        padding: 18px;
+        margin-bottom: 14px;
+        box-shadow: 0 1px 4px rgba(15, 23, 42, 0.08);
+    }
+
+    .pf-dashboard-card h4 {
+        margin: 0 0 6px 0;
+        color: #0B1F33;
+        font-size: 1rem;
+    }
+
+    .pf-dashboard-card p {
+        margin: 0;
+        color: #64748B;
+        font-size: 0.9rem;
+        line-height: 1.4;
+    }
+
+    .pf-money-positive {
+        color: #047857;
+        font-weight: 800;
+    }
+
+    .pf-money-warning {
+        color: #B45309;
+        font-weight: 800;
+    }
+
+    .pf-money-danger {
+        color: #B91C1C;
+        font-weight: 800;
+    }
+
+    .pf-section-pill {
+        display: inline-block;
+        background: #ECFDF5;
+        color: #065F46;
+        border: 1px solid #A7F3D0;
+        border-radius: 999px;
+        padding: 5px 11px;
+        margin: 4px 5px 4px 0;
+        font-size: 0.82rem;
+        font-weight: 700;
+    }
+
+    @media (max-width: 768px) {
+        .pf-dashboard-card {
+            padding: 14px;
+            border-radius: 15px;
+        }
+
+        .pf-section-pill {
+            font-size: 0.76rem;
+            padding: 4px 9px;
+        }
+    }
+    </style>
+    """,
+    unsafe_allow_html=True,
+)
+
+
 # TOP APP SWITCHER
 # =========================
 
@@ -1631,10 +1724,11 @@ if page == "Personal Finance":
 
     personal_tabs = st.tabs(
         [
-            "Overview",
+            "Dashboard",
             "Accounts",
             "Savings",
             "Subscriptions",
+            "Bills Forecast",
             "Subscription Calendar",
         ]
     )
@@ -1656,56 +1750,158 @@ if page == "Personal Finance":
     ]
 
     with personal_tabs[0]:
-        st.markdown("### Personal finance overview")
+        st.markdown("### Personal finance dashboard")
+
+        st.markdown(
+            """
+            <span class="pf-section-pill">Accounts</span>
+            <span class="pf-section-pill">Savings</span>
+            <span class="pf-section-pill">Debt</span>
+            <span class="pf-section-pill">Subscriptions</span>
+            <span class="pf-section-pill">Net worth</span>
+            """,
+            unsafe_allow_html=True,
+        )
 
         if account_records.empty:
-            st.warning("No personal accounts added yet. Go to the Accounts tab to add your bank, savings and credit accounts.")
+            st.warning("No personal accounts added yet. Go to the Accounts tab to add your bank, savings, credit card, ISA, pension and wallet balances.")
         else:
             display_accounts = account_records.copy()
             display_accounts["balance"] = pd.to_numeric(display_accounts["balance"], errors="coerce").fillna(0)
             display_accounts["credit_limit"] = pd.to_numeric(display_accounts["credit_limit"], errors="coerce").fillna(0)
 
-            st.dataframe(display_accounts, use_container_width=True)
+            total_positive_assets = display_accounts[
+                display_accounts["account_type"].isin(
+                    [
+                        "Current Account",
+                        "Savings Account",
+                        "Investment",
+                        "Stocks & Shares ISA",
+                        "Lifetime ISA",
+                        "Pension",
+                        "Digital Wallet",
+                        "Cash",
+                    ]
+                )
+            ]["balance"].sum()
 
-            provider_summary = display_accounts.groupby("provider", as_index=False)["balance"].sum()
-            provider_summary = provider_summary.sort_values("balance", ascending=False)
+            total_debt = display_accounts[
+                display_accounts["account_type"].isin(["Credit Card", "Loan/Debt"])
+            ]["balance"].sum()
 
-            st.markdown("### Balance by provider")
+            credit_cards = display_accounts[
+                display_accounts["account_type"] == "Credit Card"
+            ].copy()
+
+            total_credit_limit = credit_cards["credit_limit"].sum() if not credit_cards.empty else 0
+            total_credit_used = credit_cards["balance"].sum() if not credit_cards.empty else 0
+
+            credit_utilisation = 0
+            if total_credit_limit > 0:
+                credit_utilisation = (total_credit_used / total_credit_limit) * 100
+
+            dash_col1, dash_col2, dash_col3, dash_col4 = st.columns(4)
+
+            dash_col1.metric("Total assets", f"£{total_positive_assets:,.2f}")
+            dash_col2.metric("Total debt", f"£{total_debt:,.2f}")
+            dash_col3.metric("Credit used", f"{credit_utilisation:,.1f}%")
+            dash_col4.metric("Accounts tracked", len(display_accounts))
+
+            if credit_utilisation >= 75:
+                st.error("Credit utilisation is high. Consider prioritising credit card repayment before adding new spending.")
+            elif credit_utilisation >= 30:
+                st.warning("Credit utilisation is moderate. Keep an eye on credit card balances.")
+            elif total_credit_limit > 0:
+                st.success("Credit utilisation is currently in a healthier range.")
+
+            st.markdown("### Account type breakdown")
+
+            account_type_summary = (
+                display_accounts
+                .groupby("account_type", as_index=False)["balance"]
+                .sum()
+                .sort_values("balance", ascending=False)
+            )
+
+            st.dataframe(account_type_summary, use_container_width=True)
+
+            st.markdown("### Provider breakdown")
+
+            provider_summary = (
+                display_accounts
+                .groupby("provider", as_index=False)["balance"]
+                .sum()
+                .sort_values("balance", ascending=False)
+            )
+
             st.dataframe(provider_summary, use_container_width=True)
 
-        st.markdown("### Subscription summary")
+            st.markdown("### Accounts table")
+
+            st.dataframe(
+                display_accounts[
+                    [
+                        "provider",
+                        "account_name",
+                        "account_type",
+                        "balance",
+                        "credit_limit",
+                        "status",
+                        "last_updated",
+                    ]
+                ],
+                use_container_width=True,
+            )
+
+        st.markdown("---")
+
+        st.markdown("### Subscription control panel")
 
         if subscription_records.empty:
-            st.warning("No subscriptions added yet.")
+            st.warning("No subscriptions added yet. Go to the Subscriptions tab to add recurring personal payments.")
         else:
-            active_subscriptions = subscription_records[subscription_records["status"] == "Active"].copy()
-            active_subscriptions["amount"] = pd.to_numeric(active_subscriptions["amount"], errors="coerce").fillna(0)
-
-            monthly_subscription_total = active_subscriptions["amount"].sum() if not active_subscriptions.empty else 0
-            yearly_subscription_total = monthly_subscription_total * 12
-
-            sub_col1, sub_col2, sub_col3 = st.columns(3)
-
-            sub_col1.metric("Active subscriptions", len(active_subscriptions))
-            sub_col2.metric("Monthly subscription cost", f"£{monthly_subscription_total:,.2f}")
-            sub_col3.metric("Yearly subscription cost", f"£{yearly_subscription_total:,.2f}")
-
+            subscription_records["amount"] = pd.to_numeric(subscription_records["amount"], errors="coerce").fillna(0)
             subscription_records["next_payment_date_dt"] = pd.to_datetime(
                 subscription_records["next_payment_date"],
                 errors="coerce"
             )
 
+            active_subscriptions = subscription_records[
+                subscription_records["status"] == "Active"
+            ].copy()
+
+            monthly_subscription_total = active_subscriptions["amount"].sum() if not active_subscriptions.empty else 0
+            yearly_subscription_total = monthly_subscription_total * 12
+
             today = pd.Timestamp.today().normalize()
+
             due_soon = subscription_records[
                 (subscription_records["status"] == "Active")
                 & (subscription_records["next_payment_date_dt"] >= today)
                 & (subscription_records["next_payment_date_dt"] <= today + pd.Timedelta(days=7))
             ].copy()
 
-            if due_soon.empty:
-                st.success("No active subscriptions due in the next 7 days.")
+            overdue_subscriptions = subscription_records[
+                (subscription_records["status"] == "Active")
+                & (subscription_records["next_payment_date_dt"] < today)
+            ].copy()
+
+            sub_col1, sub_col2, sub_col3, sub_col4 = st.columns(4)
+
+            sub_col1.metric("Active subscriptions", len(active_subscriptions))
+            sub_col2.metric("Monthly total", f"£{monthly_subscription_total:,.2f}")
+            sub_col3.metric("Yearly total", f"£{yearly_subscription_total:,.2f}")
+            sub_col4.metric("Due in 7 days", len(due_soon))
+
+            if not overdue_subscriptions.empty:
+                st.error(f"{len(overdue_subscriptions)} active subscription(s) have payment dates in the past. Update their next payment dates.")
+            elif not due_soon.empty:
+                st.warning(f"{len(due_soon)} subscription(s) are due within 7 days.")
             else:
-                st.warning(f"{len(due_soon)} subscription(s) due in the next 7 days.")
+                st.success("No active subscriptions due in the next 7 days.")
+
+            if not due_soon.empty:
+                st.markdown("### Subscriptions due soon")
                 st.dataframe(
                     due_soon[
                         [
@@ -1714,10 +1910,56 @@ if page == "Personal Finance":
                             "paid_from_account",
                             "next_payment_date",
                             "colour",
+                            "category",
                         ]
                     ],
                     use_container_width=True,
                 )
+
+            st.markdown("### Subscription cost by payment account")
+
+            subscription_account_summary = (
+                active_subscriptions
+                .groupby("paid_from_account", as_index=False)["amount"]
+                .sum()
+                .sort_values("amount", ascending=False)
+            ) if not active_subscriptions.empty else pd.DataFrame(columns=["paid_from_account", "amount"])
+
+            st.dataframe(subscription_account_summary, use_container_width=True)
+
+            st.markdown("### Subscription cost by category")
+
+            subscription_category_summary = (
+                active_subscriptions
+                .groupby("category", as_index=False)["amount"]
+                .sum()
+                .sort_values("amount", ascending=False)
+            ) if not active_subscriptions.empty else pd.DataFrame(columns=["category", "amount"])
+
+            st.dataframe(subscription_category_summary, use_container_width=True)
+
+        st.markdown("---")
+
+        st.markdown("### What to update regularly")
+
+        st.markdown(
+            """
+            <div class="pf-dashboard-card">
+                <h4>Weekly money check</h4>
+                <p>Update current account balances, credit card debt, PayPal balance and any new savings movements.</p>
+            </div>
+            <div class="pf-dashboard-card">
+                <h4>Monthly subscription check</h4>
+                <p>Check the subscription calendar before payments come out so you know which account needs money in it.</p>
+            </div>
+            <div class="pf-dashboard-card">
+                <h4>Investment check</h4>
+                <p>Update Trading 212 and AJ Bell Dodl balances manually until direct platform integrations are added.</p>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+
 
     with personal_tabs[1]:
         st.markdown("### Add personal account")
@@ -1917,6 +2159,9 @@ if page == "Personal Finance":
             "NatWest",
             "Zopa",
             "American Express",
+            "Trading 212",
+            "PayPal",
+            "AJ Bell Dodl",
             "Nationwide",
             "Lloyds",
             "Revolut",
@@ -2100,6 +2345,237 @@ if page == "Personal Finance":
             )
 
     with personal_tabs[4]:
+        st.markdown("### Bills Forecast")
+        st.subheader("See what is coming out, when, and from which account")
+
+        if subscription_records.empty:
+            st.warning("No subscriptions saved yet. Add subscriptions first, then this forecast will show what is due.")
+        else:
+            forecast_records = subscription_records.copy()
+            forecast_records["amount"] = pd.to_numeric(
+                forecast_records["amount"],
+                errors="coerce"
+            ).fillna(0)
+
+            forecast_records["next_payment_date_dt"] = pd.to_datetime(
+                forecast_records["next_payment_date"],
+                errors="coerce"
+            )
+
+            active_forecast = forecast_records[
+                forecast_records["status"] == "Active"
+            ].copy()
+
+            if active_forecast.empty:
+                st.warning("No active subscriptions found.")
+            else:
+                today = pd.Timestamp.today().normalize()
+
+                active_forecast["days_until_payment"] = (
+                    active_forecast["next_payment_date_dt"] - today
+                ).dt.days
+
+                overdue_bills = active_forecast[
+                    active_forecast["days_until_payment"] < 0
+                ].copy()
+
+                due_7 = active_forecast[
+                    (active_forecast["days_until_payment"] >= 0)
+                    & (active_forecast["days_until_payment"] <= 7)
+                ].copy()
+
+                due_14 = active_forecast[
+                    (active_forecast["days_until_payment"] >= 0)
+                    & (active_forecast["days_until_payment"] <= 14)
+                ].copy()
+
+                due_30 = active_forecast[
+                    (active_forecast["days_until_payment"] >= 0)
+                    & (active_forecast["days_until_payment"] <= 30)
+                ].copy()
+
+                col_bill_1, col_bill_2, col_bill_3, col_bill_4 = st.columns(4)
+
+                col_bill_1.metric("Overdue", len(overdue_bills))
+                col_bill_2.metric("Due in 7 days", f"£{due_7['amount'].sum():,.2f}")
+                col_bill_3.metric("Due in 14 days", f"£{due_14['amount'].sum():,.2f}")
+                col_bill_4.metric("Due in 30 days", f"£{due_30['amount'].sum():,.2f}")
+
+                if not overdue_bills.empty:
+                    st.error(f"{len(overdue_bills)} subscription(s) have payment dates in the past. Update or mark them as paid.")
+                    st.dataframe(
+                        overdue_bills[
+                            [
+                                "subscription_name",
+                                "amount",
+                                "paid_from_account",
+                                "next_payment_date",
+                                "days_until_payment",
+                                "category",
+                            ]
+                        ],
+                        use_container_width=True,
+                    )
+
+                st.markdown("### Upcoming payments")
+
+                upcoming_payments = active_forecast.sort_values(
+                    "next_payment_date_dt",
+                    ascending=True
+                ).copy()
+
+                st.dataframe(
+                    upcoming_payments[
+                        [
+                            "subscription_name",
+                            "amount",
+                            "paid_from_account",
+                            "next_payment_date",
+                            "days_until_payment",
+                            "category",
+                            "colour",
+                        ]
+                    ],
+                    use_container_width=True,
+                )
+
+                st.markdown("### Money needed by account")
+
+                forecast_window = st.selectbox(
+                    "Forecast window",
+                    [
+                        "Next 7 days",
+                        "Next 14 days",
+                        "Next 30 days",
+                        "All active subscriptions",
+                    ],
+                    key="personal_bills_forecast_window"
+                )
+
+                if forecast_window == "Next 7 days":
+                    account_forecast = due_7.copy()
+                elif forecast_window == "Next 14 days":
+                    account_forecast = due_14.copy()
+                elif forecast_window == "Next 30 days":
+                    account_forecast = due_30.copy()
+                else:
+                    account_forecast = active_forecast.copy()
+
+                if account_forecast.empty:
+                    st.info("No payments found for this forecast window.")
+                else:
+                    account_needed_summary = (
+                        account_forecast
+                        .groupby("paid_from_account", as_index=False)["amount"]
+                        .sum()
+                        .sort_values("amount", ascending=False)
+                    )
+
+                    account_needed_summary = account_needed_summary.rename(
+                        columns={
+                            "paid_from_account": "Account",
+                            "amount": "Money needed",
+                        }
+                    )
+
+                    st.dataframe(account_needed_summary, use_container_width=True)
+
+                st.markdown("### Mark subscription as paid")
+
+                payment_options = [
+                    f"{index} - {row['subscription_name']} - £{float(row['amount']):,.2f} - {row['next_payment_date']}"
+                    for index, row in subscription_records.iterrows()
+                    if row["status"] == "Active"
+                ]
+
+                if not payment_options:
+                    st.info("No active subscriptions available to mark as paid.")
+                else:
+                    selected_payment = st.selectbox(
+                        "Choose subscription payment",
+                        payment_options,
+                        key="mark_subscription_paid_select"
+                    )
+
+                    selected_payment_index = int(selected_payment.split(" - ")[0])
+                    selected_payment_row = subscription_records.loc[selected_payment_index]
+
+                    st.write(
+                        f"Selected: {selected_payment_row['subscription_name']} from {selected_payment_row['paid_from_account']}."
+                    )
+
+                    date_update_mode = st.radio(
+                        "After marking as paid, update next payment date by:",
+                        [
+                            "Move forward by 1 month",
+                            "Choose custom next payment date",
+                        ],
+                        key="subscription_date_update_mode"
+                    )
+
+                    custom_next_date = None
+
+                    if date_update_mode == "Choose custom next payment date":
+                        custom_next_date = st.date_input(
+                            "Custom next payment date",
+                            key="custom_next_subscription_date"
+                        )
+
+                    if st.button("Mark selected subscription as paid"):
+                        if date_update_mode == "Move forward by 1 month":
+                            new_next_payment_date = move_subscription_date_forward(
+                                selected_payment_row["next_payment_date"]
+                            )
+                        else:
+                            new_next_payment_date = str(custom_next_date)
+
+                        subscription_records.loc[selected_payment_index, "next_payment_date"] = new_next_payment_date
+
+                        try:
+                            subscription_records.loc[selected_payment_index, "payment_day"] = int(
+                                pd.to_datetime(new_next_payment_date).day
+                            )
+                        except Exception:
+                            subscription_records.loc[selected_payment_index, "payment_day"] = 0
+
+                        save_personal_subscription_records(subscription_records)
+
+                        st.success(
+                            f"Marked as paid. Next payment date updated to {new_next_payment_date}."
+                        )
+                        st.rerun()
+
+                st.markdown("### Download bills forecast")
+
+                bills_export = active_forecast[
+                    [
+                        "subscription_name",
+                        "amount",
+                        "paid_from_account",
+                        "next_payment_date",
+                        "days_until_payment",
+                        "category",
+                        "status",
+                        "notes",
+                    ]
+                ].copy()
+
+                st.download_button(
+                    "Download bills forecast CSV",
+                    data=bills_export.to_csv(index=False).encode("utf-8"),
+                    file_name="hustlehq_personal_bills_forecast.csv",
+                    mime="text/csv",
+                )
+
+        st.markdown("---")
+
+        st.info(
+            "Use this page before payday and before the start of each month. "
+            "It shows which account needs money in it before subscriptions leave."
+        )
+
+
+    with personal_tabs[5]:
         st.markdown("### Subscription calendar")
 
         if subscription_records.empty:
