@@ -2460,6 +2460,20 @@ page = st.sidebar.radio(
     ]
 )
 
+# Extra main HustleHQ page button
+if "extra_main_page" not in st.session_state:
+    st.session_state["extra_main_page"] = ""
+
+st.sidebar.markdown("---")
+
+if st.sidebar.button("🚀 Business HQ", use_container_width=True):
+    st.session_state["extra_main_page"] = "Business HQ"
+
+if st.session_state.get("extra_main_page") == "Business HQ":
+    page = "Business HQ"
+
+
+
 render_sidebar_summary()
 
 
@@ -12548,3 +12562,1335 @@ elif page == "Settings":
     st.write("- Monthly trend charts: active")
     st.write("- Saved goal tracking: active")
     st.write("- Password protection: active")
+
+
+
+
+# ============================================================
+# PART 47 — MAIN HUSTLEHQ BUSINESS HQ
+# ============================================================
+
+BUSINESS_CLIENT_PIPELINE_FILE = DATA_FOLDER / "business_client_pipeline_records.csv"
+BUSINESS_OPPORTUNITY_FILE = DATA_FOLDER / "business_opportunity_records.csv"
+BUSINESS_TAX_TASK_FILE = DATA_FOLDER / "business_tax_task_records.csv"
+BUSINESS_WEEKLY_CHECK_FILE = DATA_FOLDER / "business_weekly_check_records.csv"
+
+
+def load_business_client_pipeline_records():
+    columns = [
+        "date_added",
+        "client_name",
+        "contact_name",
+        "email",
+        "service_type",
+        "pipeline_stage",
+        "estimated_value",
+        "probability_percent",
+        "next_action",
+        "next_action_date",
+        "status",
+        "notes",
+    ]
+
+    if BUSINESS_CLIENT_PIPELINE_FILE.exists():
+        records = pd.read_csv(BUSINESS_CLIENT_PIPELINE_FILE)
+
+        for column in columns:
+            if column not in records.columns:
+                records[column] = ""
+
+        records["estimated_value"] = pd.to_numeric(records["estimated_value"], errors="coerce").fillna(0)
+        records["probability_percent"] = pd.to_numeric(records["probability_percent"], errors="coerce").fillna(0)
+
+        return records[columns]
+
+    return pd.DataFrame(columns=columns)
+
+
+def save_business_client_pipeline_records(records):
+    records.to_csv(BUSINESS_CLIENT_PIPELINE_FILE, index=False)
+
+
+def load_business_opportunity_records():
+    columns = [
+        "date_added",
+        "opportunity_name",
+        "side_hustle",
+        "opportunity_type",
+        "expected_income",
+        "difficulty",
+        "priority",
+        "deadline",
+        "status",
+        "next_action",
+        "notes",
+    ]
+
+    if BUSINESS_OPPORTUNITY_FILE.exists():
+        records = pd.read_csv(BUSINESS_OPPORTUNITY_FILE)
+
+        for column in columns:
+            if column not in records.columns:
+                records[column] = ""
+
+        records["expected_income"] = pd.to_numeric(records["expected_income"], errors="coerce").fillna(0)
+
+        return records[columns]
+
+    return pd.DataFrame(columns=columns)
+
+
+def save_business_opportunity_records(records):
+    records.to_csv(BUSINESS_OPPORTUNITY_FILE, index=False)
+
+
+def load_business_tax_task_records():
+    columns = [
+        "date_added",
+        "task_name",
+        "tax_year",
+        "task_type",
+        "due_date",
+        "status",
+        "priority",
+        "notes",
+    ]
+
+    if BUSINESS_TAX_TASK_FILE.exists():
+        records = pd.read_csv(BUSINESS_TAX_TASK_FILE)
+
+        for column in columns:
+            if column not in records.columns:
+                records[column] = ""
+
+        return records[columns]
+
+    return pd.DataFrame(columns=columns)
+
+
+def save_business_tax_task_records(records):
+    records.to_csv(BUSINESS_TAX_TASK_FILE, index=False)
+
+
+def load_business_weekly_check_records():
+    columns = [
+        "date_added",
+        "week_start",
+        "income_updated",
+        "expenses_updated",
+        "evidence_checked",
+        "tax_export_checked",
+        "opportunities_reviewed",
+        "clients_followed_up",
+        "backup_downloaded",
+        "weekly_score",
+        "notes",
+    ]
+
+    if BUSINESS_WEEKLY_CHECK_FILE.exists():
+        records = pd.read_csv(BUSINESS_WEEKLY_CHECK_FILE)
+
+        for column in columns:
+            if column not in records.columns:
+                records[column] = ""
+
+        records["weekly_score"] = pd.to_numeric(records["weekly_score"], errors="coerce").fillna(0)
+
+        return records[columns]
+
+    return pd.DataFrame(columns=columns)
+
+
+def save_business_weekly_check_records(records):
+    records.to_csv(BUSINESS_WEEKLY_CHECK_FILE, index=False)
+
+
+def safe_load_main_income_records():
+    try:
+        return load_income_records()
+    except Exception:
+        try:
+            return load_income()
+        except Exception:
+            return pd.DataFrame()
+
+
+def safe_load_main_expense_records():
+    try:
+        return load_expense_records()
+    except Exception:
+        try:
+            return load_expenses()
+        except Exception:
+            return pd.DataFrame()
+
+
+def calculate_business_growth_score(
+    income_records,
+    expense_records,
+    client_records,
+    opportunity_records,
+    tax_task_records,
+    weekly_check_records,
+):
+    score = 0
+    notes = []
+
+    if not income_records.empty:
+        score += 20
+        notes.append("Income records exist.")
+    else:
+        notes.append("No income records found.")
+
+    if not expense_records.empty:
+        score += 15
+        notes.append("Expense records exist.")
+    else:
+        notes.append("No expense records found.")
+
+    if not client_records.empty:
+        active_clients = client_records[client_records["status"].isin(["Active", "Open", "In Progress"])]
+        if len(active_clients) > 0:
+            score += 20
+            notes.append("Active/open client pipeline exists.")
+        else:
+            score += 10
+            notes.append("Client pipeline exists but has no active/open clients.")
+    else:
+        notes.append("No client pipeline records found.")
+
+    if not opportunity_records.empty:
+        active_opportunities = opportunity_records[opportunity_records["status"].isin(["Idea", "Researching", "In Progress", "Ready to Launch"])]
+        if len(active_opportunities) > 0:
+            score += 20
+            notes.append("Active opportunities exist.")
+        else:
+            score += 10
+            notes.append("Opportunities exist but none are active.")
+    else:
+        notes.append("No opportunity records found.")
+
+    if not tax_task_records.empty:
+        incomplete_tax_tasks = tax_task_records[tax_task_records["status"] != "Done"]
+        if len(incomplete_tax_tasks) == 0:
+            score += 15
+            notes.append("Tax tasks are complete.")
+        else:
+            score += 8
+            notes.append("Some tax tasks still need attention.")
+    else:
+        notes.append("No tax task records found.")
+
+    if not weekly_check_records.empty:
+        latest_score = float(weekly_check_records.iloc[-1]["weekly_score"])
+        if latest_score >= 80:
+            score += 10
+            notes.append("Latest weekly operating score is strong.")
+        elif latest_score >= 50:
+            score += 5
+            notes.append("Latest weekly operating score is moderate.")
+        else:
+            notes.append("Latest weekly operating score is low.")
+    else:
+        notes.append("No weekly checks saved yet.")
+
+    score = max(min(score, 100), 0)
+
+    if score >= 85:
+        label = "Strong"
+    elif score >= 65:
+        label = "Developing"
+    elif score >= 40:
+        label = "Needs structure"
+    else:
+        label = "Early stage"
+
+    return score, label, notes
+
+
+def build_business_next_actions(
+    income_records,
+    expense_records,
+    client_records,
+    opportunity_records,
+    tax_task_records,
+    weekly_check_records,
+):
+    actions = []
+
+    if income_records.empty:
+        actions.append(
+            {
+                "Priority": "High",
+                "Area": "Income",
+                "Action": "Add income records for each side hustle.",
+                "Reason": "Business tracking is weak without revenue records.",
+            }
+        )
+
+    if expense_records.empty:
+        actions.append(
+            {
+                "Priority": "High",
+                "Area": "Expenses",
+                "Action": "Add expenses and evidence so profit/tax reporting is cleaner.",
+                "Reason": "You need expenses for realistic profit and HMRC preparation.",
+            }
+        )
+
+    if client_records.empty:
+        actions.append(
+            {
+                "Priority": "Medium",
+                "Area": "Clients",
+                "Action": "Add potential clients, brands, buyers or outreach contacts to the pipeline.",
+                "Reason": "The business needs a visible pipeline of possible income.",
+            }
+        )
+    else:
+        client_records = client_records.copy()
+        client_records["next_action_date_dt"] = pd.to_datetime(client_records["next_action_date"], errors="coerce")
+
+        today = pd.Timestamp.today().normalize()
+        overdue_clients = client_records[
+            (client_records["status"].isin(["Active", "Open", "In Progress"]))
+            & (client_records["next_action_date_dt"] < today)
+        ]
+
+        if not overdue_clients.empty:
+            actions.append(
+                {
+                    "Priority": "High",
+                    "Area": "Client follow-up",
+                    "Action": f"Follow up {len(overdue_clients)} overdue client/pipeline contact(s).",
+                    "Reason": "Overdue follow-ups can lose opportunities.",
+                }
+            )
+
+    if opportunity_records.empty:
+        actions.append(
+            {
+                "Priority": "Medium",
+                "Area": "Opportunities",
+                "Action": "Add your side-hustle opportunities and rank them by priority.",
+                "Reason": "This helps choose what to work on instead of juggling everything randomly.",
+            }
+        )
+    else:
+        opportunity_records = opportunity_records.copy()
+        opportunity_records["deadline_dt"] = pd.to_datetime(opportunity_records["deadline"], errors="coerce")
+        today = pd.Timestamp.today().normalize()
+        due_opportunities = opportunity_records[
+            (opportunity_records["status"].isin(["Idea", "Researching", "In Progress", "Ready to Launch"]))
+            & (opportunity_records["deadline_dt"] <= today + pd.Timedelta(days=14))
+        ]
+
+        if not due_opportunities.empty:
+            actions.append(
+                {
+                    "Priority": "High",
+                    "Area": "Opportunities",
+                    "Action": f"Review {len(due_opportunities)} opportunity/opportunities due within 14 days.",
+                    "Reason": "These need attention soon.",
+                }
+            )
+
+    if not tax_task_records.empty:
+        tax_task_records = tax_task_records.copy()
+        tax_task_records["due_date_dt"] = pd.to_datetime(tax_task_records["due_date"], errors="coerce")
+
+        today = pd.Timestamp.today().normalize()
+
+        due_tax_tasks = tax_task_records[
+            (tax_task_records["status"] != "Done")
+            & (tax_task_records["due_date_dt"] <= today + pd.Timedelta(days=30))
+        ]
+
+        if not due_tax_tasks.empty:
+            actions.append(
+                {
+                    "Priority": "High",
+                    "Area": "Tax",
+                    "Action": f"Complete or review {len(due_tax_tasks)} tax/admin task(s) due within 30 days.",
+                    "Reason": "Tax records should not be left until the last minute.",
+                }
+            )
+
+    if weekly_check_records.empty:
+        actions.append(
+            {
+                "Priority": "Low",
+                "Area": "Weekly routine",
+                "Action": "Save your first weekly operating check.",
+                "Reason": "A weekly check keeps income, expenses, clients and backups up to date.",
+            }
+        )
+
+    if not actions:
+        actions.append(
+            {
+                "Priority": "OK",
+                "Area": "General",
+                "Action": "Keep doing weekly reviews and updating the pipeline.",
+                "Reason": "No urgent business actions were detected.",
+            }
+        )
+
+    return pd.DataFrame(actions)
+
+
+def build_business_backup_zip(
+    income_records,
+    expense_records,
+    client_records,
+    opportunity_records,
+    tax_task_records,
+    weekly_check_records,
+):
+    zip_buffer = BytesIO()
+
+    with ZipFile(zip_buffer, "w") as zip_file:
+        zip_file.writestr("main_income_records.csv", income_records.to_csv(index=False))
+        zip_file.writestr("main_expense_records.csv", expense_records.to_csv(index=False))
+        zip_file.writestr("business_client_pipeline.csv", client_records.to_csv(index=False))
+        zip_file.writestr("business_opportunities.csv", opportunity_records.to_csv(index=False))
+        zip_file.writestr("business_tax_tasks.csv", tax_task_records.to_csv(index=False))
+        zip_file.writestr("business_weekly_checks.csv", weekly_check_records.to_csv(index=False))
+
+        growth_score, growth_label, growth_notes = calculate_business_growth_score(
+            income_records,
+            expense_records,
+            client_records,
+            opportunity_records,
+            tax_task_records,
+            weekly_check_records,
+        )
+
+        actions = build_business_next_actions(
+            income_records,
+            expense_records,
+            client_records,
+            opportunity_records,
+            tax_task_records,
+            weekly_check_records,
+        )
+
+        score_df = pd.DataFrame(
+            [
+                {
+                    "growth_score": growth_score,
+                    "growth_label": growth_label,
+                    "notes": " | ".join(growth_notes),
+                }
+            ]
+        )
+
+        zip_file.writestr("business_growth_score.csv", score_df.to_csv(index=False))
+        zip_file.writestr("business_next_actions.csv", actions.to_csv(index=False))
+
+    zip_buffer.seek(0)
+    return zip_buffer
+
+
+def build_business_text_report(
+    income_records,
+    expense_records,
+    client_records,
+    opportunity_records,
+    tax_task_records,
+    weekly_check_records,
+):
+    today = pd.Timestamp.today().date()
+
+    total_income = 0
+    total_expenses = 0
+
+    if not income_records.empty and "amount" in income_records.columns:
+        total_income = pd.to_numeric(income_records["amount"], errors="coerce").fillna(0).sum()
+    elif not income_records.empty and "income_amount" in income_records.columns:
+        total_income = pd.to_numeric(income_records["income_amount"], errors="coerce").fillna(0).sum()
+
+    if not expense_records.empty and "amount" in expense_records.columns:
+        total_expenses = pd.to_numeric(expense_records["amount"], errors="coerce").fillna(0).sum()
+    elif not expense_records.empty and "expense_amount" in expense_records.columns:
+        total_expenses = pd.to_numeric(expense_records["expense_amount"], errors="coerce").fillna(0).sum()
+
+    estimated_profit = total_income - total_expenses
+
+    growth_score, growth_label, growth_notes = calculate_business_growth_score(
+        income_records,
+        expense_records,
+        client_records,
+        opportunity_records,
+        tax_task_records,
+        weekly_check_records,
+    )
+
+    actions = build_business_next_actions(
+        income_records,
+        expense_records,
+        client_records,
+        opportunity_records,
+        tax_task_records,
+        weekly_check_records,
+    )
+
+    active_clients = 0
+    open_opportunities = 0
+
+    if not client_records.empty:
+        active_clients = len(client_records[client_records["status"].isin(["Active", "Open", "In Progress"])])
+
+    if not opportunity_records.empty:
+        open_opportunities = len(opportunity_records[opportunity_records["status"].isin(["Idea", "Researching", "In Progress", "Ready to Launch"])])
+
+    lines = []
+    lines.append("HustleHQ Business Report")
+    lines.append(f"Generated: {today}")
+    lines.append("")
+    lines.append("SUMMARY")
+    lines.append(f"Total income recorded: £{total_income:,.2f}")
+    lines.append(f"Total expenses recorded: £{total_expenses:,.2f}")
+    lines.append(f"Estimated profit: £{estimated_profit:,.2f}")
+    lines.append(f"Active/open clients: {active_clients}")
+    lines.append(f"Open opportunities: {open_opportunities}")
+    lines.append(f"Growth score: {growth_score}/100")
+    lines.append(f"Growth label: {growth_label}")
+    lines.append("")
+    lines.append("GROWTH NOTES")
+
+    for note in growth_notes:
+        lines.append(f"- {note}")
+
+    lines.append("")
+    lines.append("NEXT ACTIONS")
+
+    for _, row in actions.iterrows():
+        lines.append(f"- [{row['Priority']}] {row['Area']}: {row['Action']} Reason: {row['Reason']}")
+
+    lines.append("")
+    lines.append("END OF REPORT")
+
+    return "\n".join(lines)
+
+
+if "page" in globals() and page == "Business HQ":
+    st.title("🚀 Business HQ")
+    st.caption("Main HustleHQ command centre for side hustles, clients, opportunities, tax tasks and weekly operations.")
+
+    if st.button("Back to normal HustleHQ sidebar", use_container_width=True):
+        st.session_state["extra_main_page"] = ""
+        st.rerun()
+
+    income_records_b = safe_load_main_income_records()
+    expense_records_b = safe_load_main_expense_records()
+    client_records_b = load_business_client_pipeline_records()
+    opportunity_records_b = load_business_opportunity_records()
+    tax_task_records_b = load_business_tax_task_records()
+    weekly_check_records_b = load_business_weekly_check_records()
+
+    growth_score_b, growth_label_b, growth_notes_b = calculate_business_growth_score(
+        income_records_b,
+        expense_records_b,
+        client_records_b,
+        opportunity_records_b,
+        tax_task_records_b,
+        weekly_check_records_b,
+    )
+
+    next_actions_b = build_business_next_actions(
+        income_records_b,
+        expense_records_b,
+        client_records_b,
+        opportunity_records_b,
+        tax_task_records_b,
+        weekly_check_records_b,
+    )
+
+    total_income_b = 0
+    total_expenses_b = 0
+
+    if not income_records_b.empty and "amount" in income_records_b.columns:
+        total_income_b = pd.to_numeric(income_records_b["amount"], errors="coerce").fillna(0).sum()
+    elif not income_records_b.empty and "income_amount" in income_records_b.columns:
+        total_income_b = pd.to_numeric(income_records_b["income_amount"], errors="coerce").fillna(0).sum()
+
+    if not expense_records_b.empty and "amount" in expense_records_b.columns:
+        total_expenses_b = pd.to_numeric(expense_records_b["amount"], errors="coerce").fillna(0).sum()
+    elif not expense_records_b.empty and "expense_amount" in expense_records_b.columns:
+        total_expenses_b = pd.to_numeric(expense_records_b["expense_amount"], errors="coerce").fillna(0).sum()
+
+    profit_b = total_income_b - total_expenses_b
+
+    st.markdown("### Business snapshot")
+
+    snapshot_col1, snapshot_col2, snapshot_col3, snapshot_col4, snapshot_col5 = st.columns(5)
+
+    snapshot_col1.metric("Income recorded", f"£{total_income_b:,.2f}")
+    snapshot_col2.metric("Expenses recorded", f"£{total_expenses_b:,.2f}")
+    snapshot_col3.metric("Estimated profit", f"£{profit_b:,.2f}")
+    snapshot_col4.metric("Growth score", f"{growth_score_b}/100")
+    snapshot_col5.metric("Status", growth_label_b)
+
+    st.progress(growth_score_b / 100)
+
+    if growth_score_b >= 85:
+        st.success("Business HQ is strong. Keep the weekly routine consistent.")
+    elif growth_score_b >= 65:
+        st.warning("Business HQ is developing. Focus on pipeline, consistency and tax records.")
+    elif growth_score_b >= 40:
+        st.warning("Business HQ needs more structure. Add records and create weekly checks.")
+    else:
+        st.error("Business HQ is still early-stage. Build records, pipeline and operating rhythm.")
+
+    business_tabs = st.tabs(
+        [
+            "Command",
+            "Client Pipeline",
+            "Opportunities",
+            "Tax Calendar",
+            "Weekly Check",
+            "Report + Backup",
+        ]
+    )
+
+    with business_tabs[0]:
+        st.markdown("### Command")
+
+        command_col1, command_col2 = st.columns(2)
+
+        with command_col1:
+            st.markdown("#### Growth notes")
+            for note in growth_notes_b:
+                st.write(f"- {note}")
+
+        with command_col2:
+            st.markdown("#### Next actions")
+            st.dataframe(next_actions_b, use_container_width=True)
+
+        st.markdown("---")
+
+        st.markdown("### Side-hustle focus map")
+
+        focus_rows = pd.DataFrame(
+            [
+                {
+                    "Side hustle": "ReconFlow / finance apps",
+                    "Main goal": "Build and package finance tools",
+                    "Best next action": "Keep demo, screenshots, pricing and outreach ready.",
+                    "Priority": "High",
+                },
+                {
+                    "Side hustle": "HustleHQ",
+                    "Main goal": "Track income, tax, savings and operations",
+                    "Best next action": "Use weekly and monthly review routine.",
+                    "Priority": "High",
+                },
+                {
+                    "Side hustle": "Vinted / reselling",
+                    "Main goal": "Buy, list, sell and track profit",
+                    "Best next action": "Track cost, sale price, postage and profit per item.",
+                    "Priority": "Medium",
+                },
+                {
+                    "Side hustle": "UGC / content",
+                    "Main goal": "Create portfolio and pitch brands",
+                    "Best next action": "Add brand leads to Client Pipeline.",
+                    "Priority": "Medium",
+                },
+                {
+                    "Side hustle": "Digital products",
+                    "Main goal": "Create Canva/Etsy-style products",
+                    "Best next action": "Add each product idea to Opportunities.",
+                    "Priority": "Medium",
+                },
+                {
+                    "Side hustle": "Legal transcription",
+                    "Main goal": "Finish training and earn from transcription",
+                    "Best next action": "Track training completion and first paid work.",
+                    "Priority": "Medium",
+                },
+                {
+                    "Side hustle": "YouTube shorts / shows",
+                    "Main goal": "Publish repeatable content",
+                    "Best next action": "Track episodes as opportunities and weekly actions.",
+                    "Priority": "Optional",
+                },
+            ]
+        )
+
+        st.dataframe(focus_rows, use_container_width=True)
+
+        st.download_button(
+            "Download side-hustle focus map CSV",
+            data=focus_rows.to_csv(index=False).encode("utf-8"),
+            file_name="hustlehq_side_hustle_focus_map.csv",
+            mime="text/csv",
+        )
+
+    with business_tabs[1]:
+        st.markdown("### Client Pipeline")
+
+        with st.form("business_client_pipeline_form"):
+            cp_col1, cp_col2 = st.columns(2)
+
+            with cp_col1:
+                client_name = st.text_input("Client / company / brand name")
+                contact_name = st.text_input("Contact name")
+                email = st.text_input("Email")
+                service_type = st.selectbox(
+                    "Service type",
+                    [
+                        "Finance app",
+                        "UGC",
+                        "Digital product",
+                        "Reselling buyer",
+                        "Transcription",
+                        "Content collaboration",
+                        "Other",
+                    ],
+                )
+
+            with cp_col2:
+                pipeline_stage = st.selectbox(
+                    "Pipeline stage",
+                    [
+                        "Lead",
+                        "Contacted",
+                        "Interested",
+                        "Proposal Sent",
+                        "Negotiating",
+                        "Won",
+                        "Lost",
+                    ],
+                )
+
+                estimated_value = st.number_input(
+                    "Estimated value (£)",
+                    min_value=0.0,
+                    step=10.0,
+                    value=0.0,
+                )
+
+                probability_percent = st.slider(
+                    "Probability %",
+                    min_value=0,
+                    max_value=100,
+                    value=25,
+                    step=5,
+                )
+
+                next_action_date = st.date_input("Next action date")
+
+            next_action = st.text_input(
+                "Next action",
+                placeholder="Example: send portfolio, follow up, prepare pricing, DM brand."
+            )
+
+            status = st.selectbox(
+                "Status",
+                [
+                    "Open",
+                    "Active",
+                    "In Progress",
+                    "Won",
+                    "Lost",
+                    "Paused",
+                ],
+            )
+
+            notes = st.text_area("Notes")
+
+            save_client = st.form_submit_button("Save pipeline record")
+
+        if save_client:
+            if not client_name.strip():
+                st.error("Add a client/company/brand name.")
+            else:
+                new_client = pd.DataFrame(
+                    [
+                        {
+                            "date_added": str(pd.Timestamp.today().date()),
+                            "client_name": client_name.strip(),
+                            "contact_name": contact_name.strip(),
+                            "email": email.strip(),
+                            "service_type": service_type,
+                            "pipeline_stage": pipeline_stage,
+                            "estimated_value": estimated_value,
+                            "probability_percent": probability_percent,
+                            "next_action": next_action.strip(),
+                            "next_action_date": str(next_action_date),
+                            "status": status,
+                            "notes": notes.strip(),
+                        }
+                    ]
+                )
+
+                client_records_b = pd.concat([client_records_b, new_client], ignore_index=True)
+                save_business_client_pipeline_records(client_records_b)
+
+                st.success("Client pipeline record saved.")
+                st.rerun()
+
+        st.markdown("---")
+
+        if client_records_b.empty:
+            st.warning("No client pipeline records saved yet.")
+        else:
+            pipeline_calc = client_records_b.copy()
+            pipeline_calc["estimated_value"] = pd.to_numeric(pipeline_calc["estimated_value"], errors="coerce").fillna(0)
+            pipeline_calc["probability_percent"] = pd.to_numeric(pipeline_calc["probability_percent"], errors="coerce").fillna(0)
+            pipeline_calc["weighted_value"] = pipeline_calc["estimated_value"] * pipeline_calc["probability_percent"] / 100
+
+            pipe_col1, pipe_col2, pipe_col3 = st.columns(3)
+
+            pipe_col1.metric("Pipeline records", len(pipeline_calc))
+            pipe_col2.metric("Total potential value", f"£{pipeline_calc['estimated_value'].sum():,.2f}")
+            pipe_col3.metric("Weighted value", f"£{pipeline_calc['weighted_value'].sum():,.2f}")
+
+            st.dataframe(pipeline_calc, use_container_width=True)
+
+            stage_summary = (
+                pipeline_calc
+                .groupby("pipeline_stage", as_index=False)["estimated_value"]
+                .sum()
+                .sort_values("estimated_value", ascending=False)
+            )
+
+            st.markdown("#### Value by pipeline stage")
+            st.dataframe(stage_summary, use_container_width=True)
+
+            delete_client_options = [
+                f"{index} - {row['client_name']} - {row['pipeline_stage']} - £{float(row['estimated_value']):,.2f}"
+                for index, row in client_records_b.iterrows()
+            ]
+
+            selected_client_delete = st.selectbox(
+                "Choose pipeline record to delete",
+                delete_client_options,
+                key="business_client_delete_select",
+            )
+
+            if st.button("Delete selected pipeline record"):
+                selected_delete_index = int(selected_client_delete.split(" - ")[0])
+                client_records_b = client_records_b.drop(index=selected_delete_index).reset_index(drop=True)
+                save_business_client_pipeline_records(client_records_b)
+
+                st.success("Pipeline record deleted.")
+                st.rerun()
+
+            st.download_button(
+                "Download client pipeline CSV",
+                data=client_records_b.to_csv(index=False).encode("utf-8"),
+                file_name="hustlehq_business_client_pipeline.csv",
+                mime="text/csv",
+            )
+
+    with business_tabs[2]:
+        st.markdown("### Opportunities")
+
+        with st.form("business_opportunity_form"):
+            op_col1, op_col2 = st.columns(2)
+
+            with op_col1:
+                opportunity_name = st.text_input("Opportunity name")
+                side_hustle = st.selectbox(
+                    "Side hustle",
+                    [
+                        "ReconFlow",
+                        "HustleHQ",
+                        "Vinted / reselling",
+                        "UGC",
+                        "Digital products",
+                        "Legal transcription",
+                        "YouTube shorts",
+                        "Substack",
+                        "Other",
+                    ],
+                )
+
+                opportunity_type = st.selectbox(
+                    "Opportunity type",
+                    [
+                        "Product",
+                        "Client",
+                        "Content",
+                        "Course/training",
+                        "Sales lead",
+                        "Partnership",
+                        "Admin/tax",
+                        "Other",
+                    ],
+                )
+
+                expected_income = st.number_input(
+                    "Expected income/value (£)",
+                    min_value=0.0,
+                    step=10.0,
+                    value=0.0,
+                )
+
+            with op_col2:
+                difficulty = st.selectbox(
+                    "Difficulty",
+                    [
+                        "Easy",
+                        "Medium",
+                        "Hard",
+                    ],
+                )
+
+                priority = st.selectbox(
+                    "Priority",
+                    [
+                        "High",
+                        "Medium",
+                        "Low",
+                    ],
+                )
+
+                deadline = st.date_input("Deadline")
+
+                status = st.selectbox(
+                    "Status",
+                    [
+                        "Idea",
+                        "Researching",
+                        "In Progress",
+                        "Ready to Launch",
+                        "Launched",
+                        "Paused",
+                        "Dropped",
+                    ],
+                )
+
+            next_action_op = st.text_input(
+                "Next action",
+                placeholder="Example: make mockup, write pitch, upload product, send email."
+            )
+
+            notes_op = st.text_area("Opportunity notes")
+
+            save_opportunity = st.form_submit_button("Save opportunity")
+
+        if save_opportunity:
+            if not opportunity_name.strip():
+                st.error("Add an opportunity name.")
+            else:
+                new_opportunity = pd.DataFrame(
+                    [
+                        {
+                            "date_added": str(pd.Timestamp.today().date()),
+                            "opportunity_name": opportunity_name.strip(),
+                            "side_hustle": side_hustle,
+                            "opportunity_type": opportunity_type,
+                            "expected_income": expected_income,
+                            "difficulty": difficulty,
+                            "priority": priority,
+                            "deadline": str(deadline),
+                            "status": status,
+                            "next_action": next_action_op.strip(),
+                            "notes": notes_op.strip(),
+                        }
+                    ]
+                )
+
+                opportunity_records_b = pd.concat([opportunity_records_b, new_opportunity], ignore_index=True)
+                save_business_opportunity_records(opportunity_records_b)
+
+                st.success("Opportunity saved.")
+                st.rerun()
+
+        st.markdown("---")
+
+        if opportunity_records_b.empty:
+            st.warning("No opportunities saved yet.")
+        else:
+            op_calc = opportunity_records_b.copy()
+            op_calc["expected_income"] = pd.to_numeric(op_calc["expected_income"], errors="coerce").fillna(0)
+            op_calc["deadline_dt"] = pd.to_datetime(op_calc["deadline"], errors="coerce")
+
+            op_metric1, op_metric2, op_metric3 = st.columns(3)
+
+            op_metric1.metric("Opportunities", len(op_calc))
+            op_metric2.metric("Expected value", f"£{op_calc['expected_income'].sum():,.2f}")
+            op_metric3.metric("High priority", len(op_calc[op_calc["priority"] == "High"]))
+
+            st.dataframe(op_calc.drop(columns=["deadline_dt"], errors="ignore"), use_container_width=True)
+
+            value_by_hustle = (
+                op_calc
+                .groupby("side_hustle", as_index=False)["expected_income"]
+                .sum()
+                .sort_values("expected_income", ascending=False)
+            )
+
+            st.markdown("#### Expected value by side hustle")
+            st.dataframe(value_by_hustle, use_container_width=True)
+
+            due_soon = op_calc[
+                (op_calc["deadline_dt"] >= pd.Timestamp.today().normalize())
+                & (op_calc["deadline_dt"] <= pd.Timestamp.today().normalize() + pd.Timedelta(days=14))
+                & (op_calc["status"].isin(["Idea", "Researching", "In Progress", "Ready to Launch"]))
+            ].copy()
+
+            st.markdown("#### Due within 14 days")
+
+            if due_soon.empty:
+                st.info("No active opportunities due within 14 days.")
+            else:
+                st.dataframe(due_soon.drop(columns=["deadline_dt"], errors="ignore"), use_container_width=True)
+
+            delete_opportunity_options = [
+                f"{index} - {row['opportunity_name']} - {row['side_hustle']} - {row['status']}"
+                for index, row in opportunity_records_b.iterrows()
+            ]
+
+            selected_opportunity_delete = st.selectbox(
+                "Choose opportunity to delete",
+                delete_opportunity_options,
+                key="business_opportunity_delete_select",
+            )
+
+            if st.button("Delete selected opportunity"):
+                selected_delete_index = int(selected_opportunity_delete.split(" - ")[0])
+                opportunity_records_b = opportunity_records_b.drop(index=selected_delete_index).reset_index(drop=True)
+                save_business_opportunity_records(opportunity_records_b)
+
+                st.success("Opportunity deleted.")
+                st.rerun()
+
+            st.download_button(
+                "Download opportunities CSV",
+                data=opportunity_records_b.to_csv(index=False).encode("utf-8"),
+                file_name="hustlehq_business_opportunities.csv",
+                mime="text/csv",
+            )
+
+    with business_tabs[3]:
+        st.markdown("### Tax Calendar")
+
+        st.info("This is your business admin/tax reminder area. It does not submit anything to HMRC.")
+
+        with st.form("business_tax_task_form"):
+            tax_col1, tax_col2 = st.columns(2)
+
+            with tax_col1:
+                task_name = st.text_input("Task name")
+                tax_year = st.text_input("Tax year", value="2026/27")
+                task_type = st.selectbox(
+                    "Task type",
+                    [
+                        "Income records",
+                        "Expense records",
+                        "Evidence check",
+                        "Mileage/postage",
+                        "Export",
+                        "Self Assessment",
+                        "Payment",
+                        "Other",
+                    ],
+                )
+
+            with tax_col2:
+                due_date = st.date_input("Due date")
+                tax_status = st.selectbox(
+                    "Status",
+                    [
+                        "Not started",
+                        "In progress",
+                        "Waiting",
+                        "Done",
+                    ],
+                )
+
+                tax_priority = st.selectbox(
+                    "Priority",
+                    [
+                        "High",
+                        "Medium",
+                        "Low",
+                    ],
+                )
+
+            tax_notes = st.text_area("Tax/admin notes")
+
+            save_tax_task = st.form_submit_button("Save tax task")
+
+        if save_tax_task:
+            if not task_name.strip():
+                st.error("Add a tax/admin task name.")
+            else:
+                new_tax_task = pd.DataFrame(
+                    [
+                        {
+                            "date_added": str(pd.Timestamp.today().date()),
+                            "task_name": task_name.strip(),
+                            "tax_year": tax_year.strip(),
+                            "task_type": task_type,
+                            "due_date": str(due_date),
+                            "status": tax_status,
+                            "priority": tax_priority,
+                            "notes": tax_notes.strip(),
+                        }
+                    ]
+                )
+
+                tax_task_records_b = pd.concat([tax_task_records_b, new_tax_task], ignore_index=True)
+                save_business_tax_task_records(tax_task_records_b)
+
+                st.success("Tax/admin task saved.")
+                st.rerun()
+
+        st.markdown("---")
+
+        if tax_task_records_b.empty:
+            st.warning("No tax/admin tasks saved yet.")
+        else:
+            tax_calc = tax_task_records_b.copy()
+            tax_calc["due_date_dt"] = pd.to_datetime(tax_calc["due_date"], errors="coerce")
+
+            incomplete_tax = tax_calc[tax_calc["status"] != "Done"].copy()
+            due_30_tax = incomplete_tax[
+                tax_calc["due_date_dt"] <= pd.Timestamp.today().normalize() + pd.Timedelta(days=30)
+            ].copy()
+
+            tax_metric1, tax_metric2, tax_metric3 = st.columns(3)
+
+            tax_metric1.metric("Tax/admin tasks", len(tax_calc))
+            tax_metric2.metric("Incomplete", len(incomplete_tax))
+            tax_metric3.metric("Due within 30 days", len(due_30_tax))
+
+            if len(due_30_tax) > 0:
+                st.warning("Some tax/admin tasks are due within 30 days.")
+            else:
+                st.success("No incomplete tax/admin tasks are due within 30 days.")
+
+            st.dataframe(tax_calc.drop(columns=["due_date_dt"], errors="ignore"), use_container_width=True)
+
+            delete_tax_options = [
+                f"{index} - {row['task_name']} - {row['due_date']} - {row['status']}"
+                for index, row in tax_task_records_b.iterrows()
+            ]
+
+            selected_tax_delete = st.selectbox(
+                "Choose tax/admin task to delete",
+                delete_tax_options,
+                key="business_tax_delete_select",
+            )
+
+            if st.button("Delete selected tax/admin task"):
+                selected_delete_index = int(selected_tax_delete.split(" - ")[0])
+                tax_task_records_b = tax_task_records_b.drop(index=selected_delete_index).reset_index(drop=True)
+                save_business_tax_task_records(tax_task_records_b)
+
+                st.success("Tax/admin task deleted.")
+                st.rerun()
+
+            st.download_button(
+                "Download tax/admin tasks CSV",
+                data=tax_task_records_b.to_csv(index=False).encode("utf-8"),
+                file_name="hustlehq_business_tax_tasks.csv",
+                mime="text/csv",
+            )
+
+    with business_tabs[4]:
+        st.markdown("### Weekly Check")
+
+        st.info("Use this once a week to keep HustleHQ clean and useful.")
+
+        week_start_default = pd.Timestamp.today().normalize() - pd.Timedelta(days=pd.Timestamp.today().weekday())
+
+        with st.form("business_weekly_check_form"):
+            week_start = st.date_input(
+                "Week start",
+                value=week_start_default.date(),
+            )
+
+            check_col1, check_col2 = st.columns(2)
+
+            with check_col1:
+                income_updated = st.checkbox("Income updated")
+                expenses_updated = st.checkbox("Expenses updated")
+                evidence_checked = st.checkbox("Evidence checked")
+                tax_export_checked = st.checkbox("Tax export checked")
+
+            with check_col2:
+                opportunities_reviewed = st.checkbox("Opportunities reviewed")
+                clients_followed_up = st.checkbox("Clients followed up")
+                backup_downloaded = st.checkbox("Backup downloaded")
+
+            weekly_notes = st.text_area("Weekly notes")
+
+            save_weekly_check = st.form_submit_button("Save weekly check")
+
+        weekly_score = sum(
+            [
+                income_updated,
+                expenses_updated,
+                evidence_checked,
+                tax_export_checked,
+                opportunities_reviewed,
+                clients_followed_up,
+                backup_downloaded,
+            ]
+        ) / 7 * 100
+
+        st.metric("Weekly operating score preview", f"{weekly_score:,.1f}%")
+        st.progress(weekly_score / 100)
+
+        if weekly_score >= 85:
+            st.success("Strong weekly operating check.")
+        elif weekly_score >= 60:
+            st.warning("Decent weekly check, but a few areas are missing.")
+        else:
+            st.error("This weekly check is weak. Try to complete more operating tasks.")
+
+        if save_weekly_check:
+            new_weekly_check = pd.DataFrame(
+                [
+                    {
+                        "date_added": str(pd.Timestamp.today().date()),
+                        "week_start": str(week_start),
+                        "income_updated": "Yes" if income_updated else "No",
+                        "expenses_updated": "Yes" if expenses_updated else "No",
+                        "evidence_checked": "Yes" if evidence_checked else "No",
+                        "tax_export_checked": "Yes" if tax_export_checked else "No",
+                        "opportunities_reviewed": "Yes" if opportunities_reviewed else "No",
+                        "clients_followed_up": "Yes" if clients_followed_up else "No",
+                        "backup_downloaded": "Yes" if backup_downloaded else "No",
+                        "weekly_score": weekly_score,
+                        "notes": weekly_notes.strip(),
+                    }
+                ]
+            )
+
+            weekly_check_records_b = pd.concat([weekly_check_records_b, new_weekly_check], ignore_index=True)
+            save_business_weekly_check_records(weekly_check_records_b)
+
+            st.success("Weekly check saved.")
+            st.rerun()
+
+        st.markdown("---")
+
+        if weekly_check_records_b.empty:
+            st.warning("No weekly checks saved yet.")
+        else:
+            st.dataframe(weekly_check_records_b, use_container_width=True)
+
+            latest_weekly_score = float(weekly_check_records_b.iloc[-1]["weekly_score"])
+            average_weekly_score = pd.to_numeric(weekly_check_records_b["weekly_score"], errors="coerce").fillna(0).mean()
+
+            weekly_metric1, weekly_metric2, weekly_metric3 = st.columns(3)
+
+            weekly_metric1.metric("Checks saved", len(weekly_check_records_b))
+            weekly_metric2.metric("Latest score", f"{latest_weekly_score:,.1f}%")
+            weekly_metric3.metric("Average score", f"{average_weekly_score:,.1f}%")
+
+            delete_weekly_options = [
+                f"{index} - {row['week_start']} - {float(row['weekly_score']):,.1f}%"
+                for index, row in weekly_check_records_b.iterrows()
+            ]
+
+            selected_weekly_delete = st.selectbox(
+                "Choose weekly check to delete",
+                delete_weekly_options,
+                key="business_weekly_delete_select",
+            )
+
+            if st.button("Delete selected weekly check"):
+                selected_delete_index = int(selected_weekly_delete.split(" - ")[0])
+                weekly_check_records_b = weekly_check_records_b.drop(index=selected_delete_index).reset_index(drop=True)
+                save_business_weekly_check_records(weekly_check_records_b)
+
+                st.success("Weekly check deleted.")
+                st.rerun()
+
+            st.download_button(
+                "Download weekly checks CSV",
+                data=weekly_check_records_b.to_csv(index=False).encode("utf-8"),
+                file_name="hustlehq_business_weekly_checks.csv",
+                mime="text/csv",
+            )
+
+    with business_tabs[5]:
+        st.markdown("### Report + Backup")
+
+        report_text_b = build_business_text_report(
+            income_records_b,
+            expense_records_b,
+            client_records_b,
+            opportunity_records_b,
+            tax_task_records_b,
+            weekly_check_records_b,
+        )
+
+        st.markdown("#### Business report preview")
+
+        st.text_area(
+            "Business report",
+            report_text_b,
+            height=450,
+        )
+
+        st.download_button(
+            "Download business report TXT",
+            data=report_text_b.encode("utf-8"),
+            file_name="hustlehq_business_report.txt",
+            mime="text/plain",
+        )
+
+        st.markdown("---")
+
+        st.markdown("#### Business backup ZIP")
+
+        backup_zip_b = build_business_backup_zip(
+            income_records_b,
+            expense_records_b,
+            client_records_b,
+            opportunity_records_b,
+            tax_task_records_b,
+            weekly_check_records_b,
+        )
+
+        st.download_button(
+            "Download business backup ZIP",
+            data=backup_zip_b,
+            file_name="hustlehq_business_backup.zip",
+            mime="application/zip",
+        )
+
+        st.markdown("---")
+
+        st.markdown("#### Export individual CSVs")
+
+        st.download_button(
+            "Download client pipeline CSV",
+            data=client_records_b.to_csv(index=False).encode("utf-8"),
+            file_name="hustlehq_business_client_pipeline.csv",
+            mime="text/csv",
+        )
+
+        st.download_button(
+            "Download opportunities CSV",
+            data=opportunity_records_b.to_csv(index=False).encode("utf-8"),
+            file_name="hustlehq_business_opportunities.csv",
+            mime="text/csv",
+        )
+
+        st.download_button(
+            "Download tax tasks CSV",
+            data=tax_task_records_b.to_csv(index=False).encode("utf-8"),
+            file_name="hustlehq_business_tax_tasks.csv",
+            mime="text/csv",
+        )
+
+        st.download_button(
+            "Download weekly checks CSV",
+            data=weekly_check_records_b.to_csv(index=False).encode("utf-8"),
+            file_name="hustlehq_business_weekly_checks.csv",
+            mime="text/csv",
+        )
+
+        st.info("Download the business backup ZIP weekly or after major updates.")
+
