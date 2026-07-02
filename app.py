@@ -1896,6 +1896,7 @@ if page == "Personal Finance":
             "Subscription Calendar",
             "Monthly Budget",
             "Transactions",
+            "Import Transactions CSV",
         ]
     )
 
@@ -3899,6 +3900,337 @@ if page == "Personal Finance":
             "Use this tab for manual tracking until bank imports or Open Banking connections are added. "
             "For now, it does not automatically update your account balances."
         )
+
+
+
+
+    with personal_tabs[10]:
+        st.markdown("### Import Transactions CSV")
+        st.subheader("Import personal spending, income and transfer records from CSV files")
+
+        st.warning(
+            "Use this for bank exports, PayPal exports, Monzo/Revolut CSVs, manual spreadsheets or copied transaction data. "
+            "Always preview before saving."
+        )
+
+        uploaded_transaction_file = st.file_uploader(
+            "Upload personal transaction CSV",
+            type=["csv"],
+            key="personal_transaction_csv_upload"
+        )
+
+        if uploaded_transaction_file is None:
+            st.info("Upload a CSV file to begin.")
+        else:
+            try:
+                imported_transactions_df = pd.read_csv(uploaded_transaction_file)
+
+                if imported_transactions_df.empty:
+                    st.error("The uploaded CSV is empty.")
+                else:
+                    st.markdown("### Uploaded file preview")
+                    st.dataframe(imported_transactions_df.head(30), use_container_width=True)
+
+                    csv_columns = imported_transactions_df.columns.tolist()
+                    none_option = "None"
+
+                    def guess_transaction_column(possible_names):
+                        for possible_name in possible_names:
+                            for column in csv_columns:
+                                if possible_name.lower() in column.lower():
+                                    return column
+                        return csv_columns[0] if csv_columns else none_option
+
+                    st.markdown("### Map your columns")
+
+                    date_guess = guess_transaction_column(["date", "transaction date", "posted", "paid"])
+                    description_guess = guess_transaction_column(["description", "merchant", "name", "details", "reference"])
+                    amount_guess = guess_transaction_column(["amount", "value", "money", "paid", "debit", "credit"])
+                    category_guess = guess_transaction_column(["category", "type"])
+                    account_guess = guess_transaction_column(["account", "bank", "provider"])
+
+                    map_col1, map_col2 = st.columns(2)
+
+                    with map_col1:
+                        date_column = st.selectbox(
+                            "Date column",
+                            csv_columns,
+                            index=csv_columns.index(date_guess) if date_guess in csv_columns else 0
+                        )
+
+                        description_column = st.selectbox(
+                            "Description column",
+                            csv_columns,
+                            index=csv_columns.index(description_guess) if description_guess in csv_columns else 0
+                        )
+
+                        amount_column = st.selectbox(
+                            "Amount column",
+                            csv_columns,
+                            index=csv_columns.index(amount_guess) if amount_guess in csv_columns else 0
+                        )
+
+                    with map_col2:
+                        category_column = st.selectbox(
+                            "Category column",
+                            [none_option] + csv_columns,
+                            index=([none_option] + csv_columns).index(category_guess) if category_guess in csv_columns else 0
+                        )
+
+                        account_column = st.selectbox(
+                            "Account column",
+                            [none_option] + csv_columns,
+                            index=([none_option] + csv_columns).index(account_guess) if account_guess in csv_columns else 0
+                        )
+
+                        status_column = st.selectbox(
+                            "Status column",
+                            [none_option] + csv_columns,
+                            index=0
+                        )
+
+                    st.markdown("### Import settings")
+
+                    account_options = []
+
+                    account_records_for_import = load_personal_account_records()
+
+                    if not account_records_for_import.empty:
+                        account_options = [
+                            f"{row['provider']} - {row['account_name']}"
+                            for _, row in account_records_for_import.iterrows()
+                        ]
+
+                    if not account_options:
+                        account_options = [
+                            "Santander",
+                            "NatWest",
+                            "Zopa",
+                            "American Express",
+                            "Trading 212",
+                            "PayPal",
+                            "AJ Bell Dodl",
+                            "Nationwide",
+                            "Lloyds",
+                            "Revolut",
+                            "Monzo",
+                            "Halifax",
+                            "Other",
+                        ]
+
+                    default_account = st.selectbox(
+                        "Default account if no account column is used",
+                        account_options
+                    )
+
+                    default_category = st.selectbox(
+                        "Default category if no category column is used",
+                        [
+                            "Food/Groceries",
+                            "Transport",
+                            "Subscriptions",
+                            "Shopping",
+                            "Debt Repayment",
+                            "Savings Transfer",
+                            "Entertainment",
+                            "Health/Fitness",
+                            "Education",
+                            "Bills",
+                            "Family/Friends",
+                            "Beauty",
+                            "Clothing",
+                            "Investing",
+                            "Income",
+                            "Other",
+                        ]
+                    )
+
+                    amount_style = st.radio(
+                        "How should HustleHQ read the amount column?",
+                        [
+                            "Negative = expense, positive = income",
+                            "All rows are expenses",
+                            "All rows are income",
+                        ],
+                        key="personal_transaction_amount_style"
+                    )
+
+                    default_status = st.selectbox(
+                        "Default transaction status",
+                        [
+                            "Cleared",
+                            "Pending",
+                            "Planned",
+                        ]
+                    )
+
+                    add_import_tag = st.checkbox(
+                        "Add CSV import tag to notes",
+                        value=True
+                    )
+
+                    if st.button("Preview imported transactions"):
+                        preview_df = imported_transactions_df.copy()
+
+                        preview_df["_transaction_date"] = pd.to_datetime(
+                            preview_df[date_column],
+                            errors="coerce"
+                        )
+
+                        preview_df["_raw_amount"] = pd.to_numeric(
+                            preview_df[amount_column],
+                            errors="coerce"
+                        ).fillna(0)
+
+                        if amount_style == "Negative = expense, positive = income":
+                            preview_df["_transaction_type"] = preview_df["_raw_amount"].apply(
+                                lambda value: "Expense" if value < 0 else "Income"
+                            )
+                            preview_df["_amount"] = preview_df["_raw_amount"].abs()
+                        elif amount_style == "All rows are expenses":
+                            preview_df["_transaction_type"] = "Expense"
+                            preview_df["_amount"] = preview_df["_raw_amount"].abs()
+                        else:
+                            preview_df["_transaction_type"] = "Income"
+                            preview_df["_amount"] = preview_df["_raw_amount"].abs()
+
+                        preview_df["_description"] = preview_df[description_column].astype(str)
+
+                        if category_column != none_option:
+                            preview_df["_category"] = preview_df[category_column].astype(str)
+                        else:
+                            preview_df["_category"] = default_category
+
+                        if account_column != none_option:
+                            preview_df["_account"] = preview_df[account_column].astype(str)
+                        else:
+                            preview_df["_account"] = default_account
+
+                        if status_column != none_option:
+                            preview_df["_status"] = preview_df[status_column].astype(str)
+                        else:
+                            preview_df["_status"] = default_status
+
+                        preview_df["_notes"] = "Imported from personal transaction CSV"
+
+                        if add_import_tag:
+                            preview_df["_notes"] = preview_df["_notes"] + " | CSV import"
+
+                        converted_transactions = pd.DataFrame(
+                            {
+                                "date_added": str(pd.Timestamp.today().date()),
+                                "transaction_date": preview_df["_transaction_date"].dt.date.astype(str),
+                                "transaction_type": preview_df["_transaction_type"],
+                                "account": preview_df["_account"],
+                                "category": preview_df["_category"],
+                                "description": preview_df["_description"],
+                                "amount": preview_df["_amount"],
+                                "status": preview_df["_status"],
+                                "notes": preview_df["_notes"],
+                            }
+                        )
+
+                        converted_transactions = converted_transactions[
+                            converted_transactions["amount"] > 0
+                        ].copy()
+
+                        converted_transactions = converted_transactions[
+                            converted_transactions["transaction_date"].notna()
+                        ].copy()
+
+                        st.session_state["personal_transaction_import_preview"] = converted_transactions
+
+                    if "personal_transaction_import_preview" in st.session_state:
+                        converted_transactions = st.session_state["personal_transaction_import_preview"]
+
+                        st.markdown("### Converted transaction preview")
+
+                        if converted_transactions.empty:
+                            st.error("No valid transactions found after conversion. Check your date and amount columns.")
+                        else:
+                            st.dataframe(converted_transactions, use_container_width=True)
+
+                            import_income_total = converted_transactions[
+                                converted_transactions["transaction_type"] == "Income"
+                            ]["amount"].sum()
+
+                            import_expense_total = converted_transactions[
+                                converted_transactions["transaction_type"] == "Expense"
+                            ]["amount"].sum()
+
+                            import_transfer_total = converted_transactions[
+                                converted_transactions["transaction_type"] == "Transfer"
+                            ]["amount"].sum()
+
+                            import_col1, import_col2, import_col3, import_col4 = st.columns(4)
+
+                            import_col1.metric("Rows ready", len(converted_transactions))
+                            import_col2.metric("Income", f"£{import_income_total:,.2f}")
+                            import_col3.metric("Expenses", f"£{import_expense_total:,.2f}")
+                            import_col4.metric("Transfers", f"£{import_transfer_total:,.2f}")
+
+                            existing_transactions = load_personal_transaction_records()
+
+                            duplicate_count = 0
+
+                            if not existing_transactions.empty:
+                                existing_keys = set(
+                                    (
+                                        existing_transactions["transaction_date"].astype(str)
+                                        + "|"
+                                        + existing_transactions["description"].astype(str)
+                                        + "|"
+                                        + existing_transactions["amount"].astype(str)
+                                    ).tolist()
+                                )
+
+                                new_keys = (
+                                    converted_transactions["transaction_date"].astype(str)
+                                    + "|"
+                                    + converted_transactions["description"].astype(str)
+                                    + "|"
+                                    + converted_transactions["amount"].astype(str)
+                                ).tolist()
+
+                                duplicate_count = sum(1 for key in new_keys if key in existing_keys)
+
+                            if duplicate_count > 0:
+                                st.warning(f"{duplicate_count} possible duplicate transaction(s) found based on date, description and amount.")
+
+                            confirm_import = st.checkbox(
+                                "I have checked the preview and want to save these personal transactions.",
+                                key="confirm_personal_transaction_import"
+                            )
+
+                            if st.button("Save imported personal transactions"):
+                                if not confirm_import:
+                                    st.error("Tick the confirmation box before saving.")
+                                else:
+                                    updated_transactions = pd.concat(
+                                        [existing_transactions, converted_transactions],
+                                        ignore_index=True
+                                    )
+
+                                    save_personal_transaction_records(updated_transactions)
+
+                                    st.success("Personal transactions imported successfully.")
+                                    st.info("Go to Transactions or Dashboard to review the imported records.")
+
+                                    del st.session_state["personal_transaction_import_preview"]
+
+            except Exception as error:
+                st.error("Personal transaction CSV import failed.")
+                st.exception(error)
+
+        st.markdown("---")
+
+        st.markdown("### CSV import tips")
+
+        st.write("- Bank CSVs often use negative numbers for spending and positive numbers for income.")
+        st.write("- Use the amount-style option carefully before previewing.")
+        st.write("- For PayPal, Revolut or Monzo exports, map their account/category columns where available.")
+        st.write("- For credit card exports, use the card account as the default account.")
+        st.write("- Imported transactions do not automatically change your account balances yet. That comes in a later Personal Finance part.")
 
 
 
