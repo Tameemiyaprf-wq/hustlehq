@@ -232,6 +232,7 @@ PERSONAL_SUBSCRIPTION_FILE = DATA_FOLDER / "personal_subscription_records.csv"
 PERSONAL_SAVINGS_GOAL_FILE = DATA_FOLDER / "personal_savings_goal_records.csv"
 PERSONAL_BUDGET_FILE = DATA_FOLDER / "personal_budget_records.csv"
 PERSONAL_TRANSACTION_FILE = DATA_FOLDER / "personal_transaction_records.csv"
+PERSONAL_NET_WORTH_FILE = DATA_FOLDER / "personal_net_worth_history.csv"
 
 
 
@@ -729,6 +730,69 @@ def calculate_transaction_balance_impact(transaction_type, account_type, amount)
         return 0
 
     return 0
+
+
+
+def load_personal_net_worth_history():
+    columns = [
+        "snapshot_date",
+        "current_cash",
+        "savings",
+        "investments",
+        "total_assets",
+        "total_debt",
+        "net_worth",
+        "notes",
+    ]
+
+    if PERSONAL_NET_WORTH_FILE.exists():
+        records = pd.read_csv(PERSONAL_NET_WORTH_FILE)
+
+        for column in columns:
+            if column not in records.columns:
+                records[column] = ""
+
+        money_columns = [
+            "current_cash",
+            "savings",
+            "investments",
+            "total_assets",
+            "total_debt",
+            "net_worth",
+        ]
+
+        for column in money_columns:
+            records[column] = pd.to_numeric(records[column], errors="coerce").fillna(0)
+
+        return records[columns]
+
+    return pd.DataFrame(columns=columns)
+
+
+def save_personal_net_worth_history(records):
+    records.to_csv(PERSONAL_NET_WORTH_FILE, index=False)
+
+
+def build_net_worth_snapshot(account_records, notes=""):
+    net_worth_data = calculate_personal_net_worth(account_records)
+
+    current_cash = float(net_worth_data["current_cash"])
+    savings = float(net_worth_data["savings"])
+    investments = float(net_worth_data["investments"])
+    total_debt = float(net_worth_data["debts"])
+    total_assets = current_cash + savings + investments
+    net_worth = float(net_worth_data["net_worth"])
+
+    return {
+        "snapshot_date": str(pd.Timestamp.today().date()),
+        "current_cash": current_cash,
+        "savings": savings,
+        "investments": investments,
+        "total_assets": total_assets,
+        "total_debt": total_debt,
+        "net_worth": net_worth,
+        "notes": notes,
+    }
 
 
 
@@ -1952,6 +2016,7 @@ if page == "Personal Finance":
             "Transactions",
             "Import Transactions CSV",
             "Balance Manager",
+            "Net Worth History",
         ]
     )
 
@@ -4544,6 +4609,170 @@ if page == "Personal Finance":
             st.write("- Expenses on credit cards increase the amount owed.")
             st.write("- Transfers are shown but do not change balances yet.")
             st.write("- Transactions marked as applied are protected from being applied twice.")
+
+
+
+
+    with personal_tabs[12]:
+        st.markdown("### Net Worth History")
+        st.subheader("Track personal finance progress over time")
+
+        account_records_for_snapshot = load_personal_account_records()
+        net_worth_history = load_personal_net_worth_history()
+
+        current_snapshot = build_net_worth_snapshot(account_records_for_snapshot)
+
+        st.markdown("### Current snapshot preview")
+
+        nw_col1, nw_col2, nw_col3, nw_col4 = st.columns(4)
+
+        nw_col1.metric("Total assets", f"£{current_snapshot['total_assets']:,.2f}")
+        nw_col2.metric("Total debt", f"£{current_snapshot['total_debt']:,.2f}")
+        nw_col3.metric("Net worth", f"£{current_snapshot['net_worth']:,.2f}")
+        nw_col4.metric("Snapshot date", current_snapshot["snapshot_date"])
+
+        breakdown_col1, breakdown_col2, breakdown_col3 = st.columns(3)
+
+        breakdown_col1.metric("Current cash", f"£{current_snapshot['current_cash']:,.2f}")
+        breakdown_col2.metric("Savings", f"£{current_snapshot['savings']:,.2f}")
+        breakdown_col3.metric("Investments", f"£{current_snapshot['investments']:,.2f}")
+
+        snapshot_notes = st.text_area(
+            "Snapshot notes",
+            placeholder="Example: after payday, after debt repayment, end of month check, before subscriptions."
+        )
+
+        if st.button("Save net worth snapshot"):
+            new_snapshot = pd.DataFrame(
+                [
+                    build_net_worth_snapshot(
+                        account_records_for_snapshot,
+                        notes=snapshot_notes.strip()
+                    )
+                ]
+            )
+
+            net_worth_history = pd.concat(
+                [net_worth_history, new_snapshot],
+                ignore_index=True
+            )
+
+            save_personal_net_worth_history(net_worth_history)
+
+            st.success("Net worth snapshot saved.")
+            st.rerun()
+
+        st.markdown("---")
+
+        st.markdown("### Net worth history")
+
+        if net_worth_history.empty:
+            st.warning("No net worth snapshots saved yet.")
+        else:
+            net_worth_history["snapshot_date_dt"] = pd.to_datetime(
+                net_worth_history["snapshot_date"],
+                errors="coerce"
+            )
+
+            net_worth_history["net_worth"] = pd.to_numeric(
+                net_worth_history["net_worth"],
+                errors="coerce"
+            ).fillna(0)
+
+            net_worth_history["total_assets"] = pd.to_numeric(
+                net_worth_history["total_assets"],
+                errors="coerce"
+            ).fillna(0)
+
+            net_worth_history["total_debt"] = pd.to_numeric(
+                net_worth_history["total_debt"],
+                errors="coerce"
+            ).fillna(0)
+
+            sorted_history = net_worth_history.sort_values(
+                "snapshot_date_dt",
+                ascending=True
+            ).copy()
+
+            first_net_worth = float(sorted_history.iloc[0]["net_worth"])
+            latest_net_worth = float(sorted_history.iloc[-1]["net_worth"])
+            net_worth_change = latest_net_worth - first_net_worth
+
+            first_debt = float(sorted_history.iloc[0]["total_debt"])
+            latest_debt = float(sorted_history.iloc[-1]["total_debt"])
+            debt_change = latest_debt - first_debt
+
+            hist_col1, hist_col2, hist_col3, hist_col4 = st.columns(4)
+
+            hist_col1.metric("Snapshots saved", len(sorted_history))
+            hist_col2.metric("Latest net worth", f"£{latest_net_worth:,.2f}")
+            hist_col3.metric("Net worth change", f"£{net_worth_change:,.2f}")
+            hist_col4.metric("Debt change", f"£{debt_change:,.2f}")
+
+            if net_worth_change > 0:
+                st.success("Net worth has increased since your first saved snapshot.")
+            elif net_worth_change < 0:
+                st.warning("Net worth has decreased since your first saved snapshot.")
+            else:
+                st.info("Net worth is unchanged from your first saved snapshot.")
+
+            st.markdown("### Net worth trend")
+
+            chart_history = sorted_history.dropna(subset=["snapshot_date_dt"]).copy()
+
+            if len(chart_history) >= 2:
+                st.line_chart(
+                    chart_history.set_index("snapshot_date_dt")[
+                        [
+                            "net_worth",
+                            "total_assets",
+                            "total_debt",
+                        ]
+                    ]
+                )
+            else:
+                st.info("Save at least 2 snapshots to see a trend chart.")
+
+            st.markdown("### Snapshot table")
+
+            st.dataframe(
+                sorted_history.drop(columns=["snapshot_date_dt"], errors="ignore"),
+                use_container_width=True,
+            )
+
+            st.markdown("### Delete snapshot")
+
+            delete_snapshot_options = [
+                f"{index} - {row['snapshot_date']} - Net worth £{float(row['net_worth']):,.2f}"
+                for index, row in net_worth_history.iterrows()
+            ]
+
+            selected_snapshot_delete = st.selectbox(
+                "Choose snapshot to delete",
+                delete_snapshot_options,
+                key="personal_net_worth_snapshot_delete_select"
+            )
+
+            if st.button("Delete selected snapshot"):
+                selected_delete_index = int(selected_snapshot_delete.split(" - ")[0])
+                net_worth_history = net_worth_history.drop(index=selected_delete_index).reset_index(drop=True)
+                save_personal_net_worth_history(net_worth_history)
+
+                st.success("Snapshot deleted.")
+                st.rerun()
+
+            st.download_button(
+                "Download net worth history CSV",
+                data=net_worth_history.drop(columns=["snapshot_date_dt"], errors="ignore").to_csv(index=False).encode("utf-8"),
+                file_name="hustlehq_personal_net_worth_history.csv",
+                mime="text/csv",
+            )
+
+        st.markdown("---")
+
+        st.info(
+            "Use this at the end of each week or month. It gives you a record of whether your money position is improving."
+        )
 
 
 
