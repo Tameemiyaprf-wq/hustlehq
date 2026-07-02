@@ -733,6 +733,256 @@ def calculate_transaction_balance_impact(transaction_type, account_type, amount)
 
 
 
+def get_personal_data_quality_checks(
+    account_records,
+    subscription_records,
+    transaction_records,
+    budget_records,
+    savings_goal_records,
+    net_worth_history,
+):
+    checks = []
+
+    checks.append(
+        {
+            "Area": "Accounts",
+            "Status": "OK" if not account_records.empty else "Missing",
+            "Issue": "Personal accounts are saved." if not account_records.empty else "No personal accounts added yet.",
+            "Action": "Update balances weekly." if not account_records.empty else "Add your bank, savings, credit card and investment accounts.",
+        }
+    )
+
+    checks.append(
+        {
+            "Area": "Subscriptions",
+            "Status": "OK" if not subscription_records.empty else "Missing",
+            "Issue": "Subscriptions are saved." if not subscription_records.empty else "No subscriptions added yet.",
+            "Action": "Review payment dates monthly." if not subscription_records.empty else "Add subscriptions with payment dates and payment accounts.",
+        }
+    )
+
+    checks.append(
+        {
+            "Area": "Transactions",
+            "Status": "OK" if not transaction_records.empty else "Missing",
+            "Issue": "Transactions are saved." if not transaction_records.empty else "No personal transactions logged yet.",
+            "Action": "Import or log transactions weekly." if not transaction_records.empty else "Use Transactions or Import Transactions CSV.",
+        }
+    )
+
+    checks.append(
+        {
+            "Area": "Budget",
+            "Status": "OK" if not budget_records.empty else "Missing",
+            "Issue": "Monthly budgets are saved." if not budget_records.empty else "No monthly budget saved yet.",
+            "Action": "Compare budget to actual spending monthly." if not budget_records.empty else "Create a budget in Monthly Budget.",
+        }
+    )
+
+    checks.append(
+        {
+            "Area": "Savings Goals",
+            "Status": "OK" if not savings_goal_records.empty else "Missing",
+            "Issue": "Savings goals are saved." if not savings_goal_records.empty else "No savings goals saved yet.",
+            "Action": "Update goal progress after saving money." if not savings_goal_records.empty else "Add at least one goal, such as Emergency Fund.",
+        }
+    )
+
+    checks.append(
+        {
+            "Area": "Net Worth History",
+            "Status": "OK" if not net_worth_history.empty else "Missing",
+            "Issue": "Net worth snapshots are saved." if not net_worth_history.empty else "No net worth snapshots saved yet.",
+            "Action": "Save snapshots weekly or monthly." if not net_worth_history.empty else "Save your first net worth snapshot.",
+        }
+    )
+
+    return pd.DataFrame(checks)
+
+
+def get_personal_risk_flags(
+    account_records,
+    subscription_records,
+    transaction_records,
+    budget_records,
+    savings_goal_records,
+):
+    flags = []
+
+    net_worth_data = calculate_personal_net_worth(account_records)
+    total_debt = float(net_worth_data["debts"])
+    total_assets = float(net_worth_data["current_cash"]) + float(net_worth_data["savings"]) + float(net_worth_data["investments"])
+
+    if total_debt > 0 and total_assets > 0:
+        debt_ratio = total_debt / total_assets
+
+        if debt_ratio >= 1:
+            flags.append(
+                {
+                    "Risk": "Debt pressure",
+                    "Level": "High",
+                    "Detail": "Tracked debt is equal to or higher than tracked assets.",
+                    "Action": "Prioritise debt repayment and avoid new discretionary credit spending.",
+                }
+            )
+        elif debt_ratio >= 0.5:
+            flags.append(
+                {
+                    "Risk": "Debt pressure",
+                    "Level": "Medium",
+                    "Detail": "Tracked debt is more than half of tracked assets.",
+                    "Action": "Keep repayments consistent and monitor credit use.",
+                }
+            )
+
+    if not account_records.empty:
+        accounts = account_records.copy()
+        accounts["balance"] = pd.to_numeric(accounts["balance"], errors="coerce").fillna(0)
+        accounts["credit_limit"] = pd.to_numeric(accounts["credit_limit"], errors="coerce").fillna(0)
+
+        credit_cards = accounts[accounts["account_type"] == "Credit Card"].copy()
+
+        if not credit_cards.empty:
+            credit_limit = credit_cards["credit_limit"].sum()
+            credit_used = credit_cards["balance"].sum()
+            utilisation = 0
+
+            if credit_limit > 0:
+                utilisation = credit_used / credit_limit * 100
+
+            if utilisation >= 75:
+                flags.append(
+                    {
+                        "Risk": "Credit utilisation",
+                        "Level": "High",
+                        "Detail": f"Credit utilisation is {utilisation:,.1f}%.",
+                        "Action": "Bring card balances down before adding new spending.",
+                    }
+                )
+            elif utilisation >= 30:
+                flags.append(
+                    {
+                        "Risk": "Credit utilisation",
+                        "Level": "Medium",
+                        "Detail": f"Credit utilisation is {utilisation:,.1f}%.",
+                        "Action": "Keep an eye on repayments and avoid relying on credit.",
+                    }
+                )
+
+    if not subscription_records.empty:
+        subscriptions = subscription_records.copy()
+        subscriptions["amount"] = pd.to_numeric(subscriptions["amount"], errors="coerce").fillna(0)
+        subscriptions["next_payment_date_dt"] = pd.to_datetime(subscriptions["next_payment_date"], errors="coerce")
+
+        today = pd.Timestamp.today().normalize()
+
+        overdue_subs = subscriptions[
+            (subscriptions["status"] == "Active")
+            & (subscriptions["next_payment_date_dt"] < today)
+        ].copy()
+
+        due_soon_subs = subscriptions[
+            (subscriptions["status"] == "Active")
+            & (subscriptions["next_payment_date_dt"] >= today)
+            & (subscriptions["next_payment_date_dt"] <= today + pd.Timedelta(days=7))
+        ].copy()
+
+        if not overdue_subs.empty:
+            flags.append(
+                {
+                    "Risk": "Overdue subscription dates",
+                    "Level": "Medium",
+                    "Detail": f"{len(overdue_subs)} active subscription date(s) are in the past.",
+                    "Action": "Mark subscriptions as paid or update their next payment dates.",
+                }
+            )
+
+        if not due_soon_subs.empty:
+            flags.append(
+                {
+                    "Risk": "Subscriptions due soon",
+                    "Level": "Low",
+                    "Detail": f"{len(due_soon_subs)} subscription(s) are due in the next 7 days.",
+                    "Action": "Check that the payment accounts have enough money.",
+                }
+            )
+
+    if budget_records.empty:
+        flags.append(
+            {
+                "Risk": "No active budget",
+                "Level": "Medium",
+                "Detail": "No monthly budget records found.",
+                "Action": "Create a monthly budget so spending can be compared properly.",
+            }
+        )
+
+    if savings_goal_records.empty:
+        flags.append(
+            {
+                "Risk": "No savings goals",
+                "Level": "Low",
+                "Detail": "No savings goals are being tracked.",
+                "Action": "Add at least one emergency fund or move-out savings goal.",
+            }
+        )
+
+    if not flags:
+        flags.append(
+            {
+                "Risk": "No major risks found",
+                "Level": "OK",
+                "Detail": "The current records do not show a major risk flag.",
+                "Action": "Keep updating balances, transactions and snapshots regularly.",
+            }
+        )
+
+    return pd.DataFrame(flags)
+
+
+def build_personal_finance_backup_zip(
+    account_records,
+    subscription_records,
+    transaction_records,
+    budget_records,
+    savings_goal_records,
+    net_worth_history,
+):
+    zip_buffer = BytesIO()
+
+    with ZipFile(zip_buffer, "w") as zip_file:
+        zip_file.writestr("personal_accounts.csv", account_records.to_csv(index=False))
+        zip_file.writestr("personal_subscriptions.csv", subscription_records.to_csv(index=False))
+        zip_file.writestr("personal_transactions.csv", transaction_records.to_csv(index=False))
+        zip_file.writestr("personal_budgets.csv", budget_records.to_csv(index=False))
+        zip_file.writestr("personal_savings_goals.csv", savings_goal_records.to_csv(index=False))
+        zip_file.writestr("personal_net_worth_history.csv", net_worth_history.to_csv(index=False))
+
+        quality_checks = get_personal_data_quality_checks(
+            account_records,
+            subscription_records,
+            transaction_records,
+            budget_records,
+            savings_goal_records,
+            net_worth_history,
+        )
+
+        risk_flags = get_personal_risk_flags(
+            account_records,
+            subscription_records,
+            transaction_records,
+            budget_records,
+            savings_goal_records,
+        )
+
+        zip_file.writestr("personal_data_quality_checks.csv", quality_checks.to_csv(index=False))
+        zip_file.writestr("personal_risk_flags.csv", risk_flags.to_csv(index=False))
+
+    zip_buffer.seek(0)
+    return zip_buffer
+
+
+
 def build_personal_report_summary(
     selected_year,
     selected_month,
@@ -1572,9 +1822,24 @@ if not require_password():
     st.stop()
 
 
+def submit_login_password():
+    password_attempt = st.session_state.get("hustlehq_password_attempt", "")
+    saved_password = get_app_password()
+
+    if password_attempt == saved_password:
+        st.session_state["authenticated"] = True
+        st.session_state["login_error"] = ""
+    else:
+        st.session_state["authenticated"] = False
+        st.session_state["login_error"] = "Incorrect password."
+
+
 def check_password():
     if "authenticated" not in st.session_state:
         st.session_state["authenticated"] = False
+
+    if "login_error" not in st.session_state:
+        st.session_state["login_error"] = ""
 
     if st.session_state["authenticated"]:
         return True
@@ -1582,27 +1847,23 @@ def check_password():
     st.markdown("## HustleHQ Login")
     st.caption("Enter your app password to continue.")
 
-    with st.form("hustlehq_login_form", clear_on_submit=False):
-        password_attempt = st.text_input(
-            "Password",
-            type="password",
-            key="hustlehq_password_attempt",
-            placeholder="Enter password"
-        )
+    st.text_input(
+        "Password",
+        type="password",
+        key="hustlehq_password_attempt",
+        placeholder="Enter password and press Enter",
+        on_change=submit_login_password,
+    )
 
-        submitted_login = st.form_submit_button("Log in")
-
-    if submitted_login:
-        saved_password = get_app_password()
-
-        if password_attempt == saved_password:
-            st.session_state["authenticated"] = True
-            st.success("Login successful.")
+    if st.button("Log in", use_container_width=True):
+        submit_login_password()
+        if st.session_state.get("authenticated"):
             st.rerun()
-        else:
-            st.error("Incorrect password.")
 
-    st.info("Tip: type your password and press Enter to log in.")
+    if st.session_state.get("login_error"):
+        st.error(st.session_state["login_error"])
+
+    st.info("Tip: type your password and press Enter.")
     return False
 
 
@@ -2342,6 +2603,7 @@ if page == "Personal Finance":
             "Net Worth History",
             "Intelligence",
             "Reports",
+            "Command Centre",
         ]
     )
 
@@ -5912,6 +6174,291 @@ if page == "Personal Finance":
         st.info(
             "Use Reports at the end of each month. It pulls together accounts, transactions, subscriptions, budgets, goals and net worth."
         )
+
+
+
+
+    with personal_tabs[15]:
+        st.markdown("### Command Centre")
+        st.subheader("Personal finance control panel, risk flags, checks and backup")
+
+        account_records_c = load_personal_account_records()
+        subscription_records_c = load_personal_subscription_records()
+        transaction_records_c = load_personal_transaction_records()
+        budget_records_c = load_personal_budget_records()
+        savings_goal_records_c = load_personal_savings_goal_records()
+        net_worth_history_c = load_personal_net_worth_history()
+
+        net_worth_data_c = calculate_personal_net_worth(account_records_c)
+
+        current_cash_c = float(net_worth_data_c["current_cash"])
+        savings_c = float(net_worth_data_c["savings"])
+        investments_c = float(net_worth_data_c["investments"])
+        debts_c = float(net_worth_data_c["debts"])
+        net_worth_c = float(net_worth_data_c["net_worth"])
+        total_assets_c = current_cash_c + savings_c + investments_c
+
+        st.markdown("### Quick status")
+
+        cc_col1, cc_col2, cc_col3, cc_col4, cc_col5 = st.columns(5)
+
+        cc_col1.metric("Current cash", f"£{current_cash_c:,.2f}")
+        cc_col2.metric("Savings", f"£{savings_c:,.2f}")
+        cc_col3.metric("Investments", f"£{investments_c:,.2f}")
+        cc_col4.metric("Debt", f"£{debts_c:,.2f}")
+        cc_col5.metric("Net worth", f"£{net_worth_c:,.2f}")
+
+        st.markdown("---")
+
+        st.markdown("### Data quality checker")
+
+        quality_checks_c = get_personal_data_quality_checks(
+            account_records_c,
+            subscription_records_c,
+            transaction_records_c,
+            budget_records_c,
+            savings_goal_records_c,
+            net_worth_history_c,
+        )
+
+        st.dataframe(quality_checks_c, use_container_width=True)
+
+        missing_count_c = len(quality_checks_c[quality_checks_c["Status"] == "Missing"])
+
+        if missing_count_c == 0:
+            st.success("All major personal finance data areas have at least one saved record.")
+        else:
+            st.warning(f"{missing_count_c} personal finance data area(s) are missing records.")
+
+        st.markdown("---")
+
+        st.markdown("### Risk flags")
+
+        risk_flags_c = get_personal_risk_flags(
+            account_records_c,
+            subscription_records_c,
+            transaction_records_c,
+            budget_records_c,
+            savings_goal_records_c,
+        )
+
+        st.dataframe(risk_flags_c, use_container_width=True)
+
+        high_risks_c = len(risk_flags_c[risk_flags_c["Level"] == "High"])
+        medium_risks_c = len(risk_flags_c[risk_flags_c["Level"] == "Medium"])
+
+        risk_col1, risk_col2, risk_col3 = st.columns(3)
+
+        risk_col1.metric("High risks", high_risks_c)
+        risk_col2.metric("Medium risks", medium_risks_c)
+        risk_col3.metric("Total flags", len(risk_flags_c))
+
+        if high_risks_c > 0:
+            st.error("High-priority money risks are present.")
+        elif medium_risks_c > 0:
+            st.warning("Some medium-priority issues need attention.")
+        else:
+            st.success("No high or medium risk flags found.")
+
+        st.markdown("---")
+
+        st.markdown("### Next 30-day money calendar summary")
+
+        upcoming_rows = []
+
+        today_c = pd.Timestamp.today().normalize()
+        end_date_c = today_c + pd.Timedelta(days=30)
+
+        if not subscription_records_c.empty:
+            subscriptions_c = subscription_records_c.copy()
+            subscriptions_c["amount"] = pd.to_numeric(subscriptions_c["amount"], errors="coerce").fillna(0)
+            subscriptions_c["next_payment_date_dt"] = pd.to_datetime(subscriptions_c["next_payment_date"], errors="coerce")
+
+            upcoming_subs_c = subscriptions_c[
+                (subscriptions_c["status"] == "Active")
+                & (subscriptions_c["next_payment_date_dt"] >= today_c)
+                & (subscriptions_c["next_payment_date_dt"] <= end_date_c)
+            ].copy()
+
+            for _, row in upcoming_subs_c.iterrows():
+                upcoming_rows.append(
+                    {
+                        "Date": str(row["next_payment_date"]),
+                        "Type": "Subscription",
+                        "Name": row["subscription_name"],
+                        "Amount": row["amount"],
+                        "Account": row["paid_from_account"],
+                        "Action": "Make sure this account has enough money.",
+                    }
+                )
+
+        if not savings_goal_records_c.empty:
+            goals_c = savings_goal_records_c.copy()
+            goals_c["deadline_dt"] = pd.to_datetime(goals_c["deadline"], errors="coerce")
+            goals_c["target_amount"] = pd.to_numeric(goals_c["target_amount"], errors="coerce").fillna(0)
+            goals_c["current_amount"] = pd.to_numeric(goals_c["current_amount"], errors="coerce").fillna(0)
+
+            upcoming_goals_c = goals_c[
+                (goals_c["status"] == "Active")
+                & (goals_c["deadline_dt"] >= today_c)
+                & (goals_c["deadline_dt"] <= end_date_c)
+            ].copy()
+
+            for _, row in upcoming_goals_c.iterrows():
+                remaining_goal = max(float(row["target_amount"]) - float(row["current_amount"]), 0)
+                upcoming_rows.append(
+                    {
+                        "Date": str(row["deadline"]),
+                        "Type": "Savings goal deadline",
+                        "Name": row["goal_name"],
+                        "Amount": remaining_goal,
+                        "Account": row["linked_account"],
+                        "Action": "Check if this goal needs a contribution.",
+                    }
+                )
+
+        if upcoming_rows:
+            upcoming_df_c = pd.DataFrame(upcoming_rows).sort_values("Date", ascending=True)
+            st.dataframe(upcoming_df_c, use_container_width=True)
+
+            st.metric("Money scheduled/needed in next 30 days", f"£{upcoming_df_c['Amount'].sum():,.2f}")
+        else:
+            st.info("No active subscription payments or savings-goal deadlines found in the next 30 days.")
+
+        st.markdown("---")
+
+        st.markdown("### Subscription cancellation tracker")
+
+        if subscription_records_c.empty:
+            st.warning("No subscriptions found.")
+        else:
+            subscriptions_display_c = subscription_records_c.copy()
+            subscriptions_display_c["amount"] = pd.to_numeric(subscriptions_display_c["amount"], errors="coerce").fillna(0)
+
+            active_subscriptions_c = subscriptions_display_c[
+                subscriptions_display_c["status"] == "Active"
+            ].copy()
+
+            st.dataframe(
+                active_subscriptions_c[
+                    [
+                        "subscription_name",
+                        "amount",
+                        "category",
+                        "paid_from_account",
+                        "next_payment_date",
+                        "colour",
+                        "status",
+                        "notes",
+                    ]
+                ],
+                use_container_width=True,
+            )
+
+            cancel_options_c = [
+                f"{index} - {row['subscription_name']} - £{float(row['amount']):,.2f}"
+                for index, row in subscription_records_c.iterrows()
+                if row["status"] == "Active"
+            ]
+
+            if cancel_options_c:
+                selected_cancel_c = st.selectbox(
+                    "Choose subscription to mark as cancelled",
+                    cancel_options_c,
+                    key="command_centre_cancel_subscription_select"
+                )
+
+                if st.button("Mark selected subscription as cancelled"):
+                    selected_cancel_index_c = int(selected_cancel_c.split(" - ")[0])
+                    subscription_records_c.loc[selected_cancel_index_c, "status"] = "Cancelled"
+                    save_personal_subscription_records(subscription_records_c)
+
+                    st.success("Subscription marked as cancelled.")
+                    st.rerun()
+            else:
+                st.info("No active subscriptions available to cancel.")
+
+        st.markdown("---")
+
+        st.markdown("### Account review tracker")
+
+        if account_records_c.empty:
+            st.warning("No accounts found.")
+        else:
+            accounts_review_c = account_records_c.copy()
+            accounts_review_c["balance"] = pd.to_numeric(accounts_review_c["balance"], errors="coerce").fillna(0)
+            accounts_review_c["last_updated_dt"] = pd.to_datetime(accounts_review_c["last_updated"], errors="coerce")
+
+            stale_accounts_c = accounts_review_c[
+                accounts_review_c["last_updated_dt"] < today_c - pd.Timedelta(days=7)
+            ].copy()
+
+            stale_col1, stale_col2 = st.columns(2)
+
+            stale_col1.metric("Accounts tracked", len(accounts_review_c))
+            stale_col2.metric("Stale balances", len(stale_accounts_c))
+
+            if stale_accounts_c.empty:
+                st.success("No account balances appear older than 7 days.")
+            else:
+                st.warning("Some account balances are older than 7 days.")
+                st.dataframe(
+                    stale_accounts_c[
+                        [
+                            "provider",
+                            "account_name",
+                            "account_type",
+                            "balance",
+                            "last_updated",
+                            "status",
+                        ]
+                    ],
+                    use_container_width=True,
+                )
+
+        st.markdown("---")
+
+        st.markdown("### Personal finance backup ZIP")
+
+        personal_backup_zip_c = build_personal_finance_backup_zip(
+            account_records_c,
+            subscription_records_c,
+            transaction_records_c,
+            budget_records_c,
+            savings_goal_records_c,
+            net_worth_history_c,
+        )
+
+        st.download_button(
+            "Download personal finance backup ZIP",
+            data=personal_backup_zip_c,
+            file_name="hustlehq_personal_finance_backup.zip",
+            mime="application/zip",
+        )
+
+        st.info(
+            "Download this ZIP weekly. It contains personal accounts, subscriptions, transactions, budgets, savings goals, "
+            "net worth history, data quality checks and risk flags."
+        )
+
+        st.markdown("---")
+
+        st.markdown("### Weekly command checklist")
+
+        checklist_items_c = [
+            "Update bank and credit card balances.",
+            "Import or log personal transactions.",
+            "Apply transactions in Balance Manager.",
+            "Check subscriptions due in the next 7 days.",
+            "Update savings goal progress.",
+            "Save a net worth snapshot.",
+            "Download a backup ZIP.",
+        ]
+
+        for item in checklist_items_c:
+            st.checkbox(item, key=f"command_centre_check_{item}")
+
+        st.caption("These checklist ticks are temporary for the session. Persistent checklists can be added later.")
 
 
 
