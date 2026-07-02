@@ -733,6 +733,167 @@ def calculate_transaction_balance_impact(transaction_type, account_type, amount)
 
 
 
+def build_personal_report_summary(
+    selected_year,
+    selected_month,
+    account_records,
+    subscription_records,
+    transaction_records,
+    budget_records,
+    savings_goal_records,
+    net_worth_history,
+):
+    month_name = calendar.month_name[int(selected_month)]
+
+    net_worth_data = calculate_personal_net_worth(account_records)
+
+    current_cash = float(net_worth_data["current_cash"])
+    savings = float(net_worth_data["savings"])
+    investments = float(net_worth_data["investments"])
+    total_debt = float(net_worth_data["debts"])
+    total_assets = current_cash + savings + investments
+    net_worth = float(net_worth_data["net_worth"])
+
+    month_income = 0
+    month_spending = 0
+    month_transfers = 0
+    month_net = 0
+
+    if not transaction_records.empty:
+        transaction_records = transaction_records.copy()
+        transaction_records["amount"] = pd.to_numeric(transaction_records["amount"], errors="coerce").fillna(0)
+        transaction_records["transaction_date_dt"] = pd.to_datetime(transaction_records["transaction_date"], errors="coerce")
+
+        month_transactions = transaction_records[
+            (transaction_records["transaction_date_dt"].dt.year == int(selected_year))
+            & (transaction_records["transaction_date_dt"].dt.month == int(selected_month))
+        ].copy()
+
+        if not month_transactions.empty:
+            month_income = month_transactions[
+                month_transactions["transaction_type"] == "Income"
+            ]["amount"].sum()
+
+            month_spending = month_transactions[
+                month_transactions["transaction_type"] == "Expense"
+            ]["amount"].sum()
+
+            month_transfers = month_transactions[
+                month_transactions["transaction_type"] == "Transfer"
+            ]["amount"].sum()
+
+            month_net = month_income - month_spending
+
+    subscription_total = 0
+    active_subscription_count = 0
+
+    if not subscription_records.empty:
+        subscription_records = subscription_records.copy()
+        subscription_records["amount"] = pd.to_numeric(subscription_records["amount"], errors="coerce").fillna(0)
+        subscription_records["next_payment_date_dt"] = pd.to_datetime(subscription_records["next_payment_date"], errors="coerce")
+
+        active_subscriptions = subscription_records[
+            subscription_records["status"] == "Active"
+        ].copy()
+
+        active_subscription_count = len(active_subscriptions)
+
+        month_subscriptions = active_subscriptions[
+            (active_subscriptions["next_payment_date_dt"].dt.year == int(selected_year))
+            & (active_subscriptions["next_payment_date_dt"].dt.month == int(selected_month))
+        ].copy()
+
+        subscription_total = month_subscriptions["amount"].sum() if not month_subscriptions.empty else 0
+
+    budget_remaining = 0
+    planned_outgoing = 0
+    expected_income = 0
+    budget_status = "No budget found"
+
+    if not budget_records.empty:
+        budget_records = budget_records.copy()
+        budget_records["budget_year"] = pd.to_numeric(budget_records["budget_year"], errors="coerce").fillna(0).astype(int)
+
+        selected_budget = budget_records[
+            (budget_records["budget_month"] == month_name)
+            & (budget_records["budget_year"] == int(selected_year))
+        ].copy()
+
+        if not selected_budget.empty:
+            latest_budget = selected_budget.iloc[-1]
+            expected_income = float(latest_budget["income_expected"])
+            planned_outgoing = float(latest_budget["total_planned_outgoing"])
+            budget_remaining = float(latest_budget["remaining_money"])
+            budget_status = str(latest_budget["status"])
+
+    active_goal_count = 0
+    goal_target = 0
+    goal_saved = 0
+    goal_progress = 0
+
+    if not savings_goal_records.empty:
+        savings_goal_records = savings_goal_records.copy()
+        savings_goal_records["target_amount"] = pd.to_numeric(savings_goal_records["target_amount"], errors="coerce").fillna(0)
+        savings_goal_records["current_amount"] = pd.to_numeric(savings_goal_records["current_amount"], errors="coerce").fillna(0)
+
+        active_goals = savings_goal_records[
+            savings_goal_records["status"] == "Active"
+        ].copy()
+
+        active_goal_count = len(active_goals)
+        goal_target = active_goals["target_amount"].sum() if not active_goals.empty else 0
+        goal_saved = active_goals["current_amount"].sum() if not active_goals.empty else 0
+
+        if goal_target > 0:
+            goal_progress = min((goal_saved / goal_target) * 100, 100)
+
+    credit_utilisation = 0
+
+    if not account_records.empty:
+        account_records = account_records.copy()
+        account_records["balance"] = pd.to_numeric(account_records["balance"], errors="coerce").fillna(0)
+        account_records["credit_limit"] = pd.to_numeric(account_records["credit_limit"], errors="coerce").fillna(0)
+
+        credit_cards = account_records[
+            account_records["account_type"] == "Credit Card"
+        ].copy()
+
+        if not credit_cards.empty:
+            credit_limit = credit_cards["credit_limit"].sum()
+            credit_used = credit_cards["balance"].sum()
+
+            if credit_limit > 0:
+                credit_utilisation = (credit_used / credit_limit) * 100
+
+    summary_rows = [
+        {"Section": "Period", "Metric": "Month", "Value": f"{month_name} {int(selected_year)}"},
+        {"Section": "Accounts", "Metric": "Current cash", "Value": current_cash},
+        {"Section": "Accounts", "Metric": "Savings", "Value": savings},
+        {"Section": "Accounts", "Metric": "Investments", "Value": investments},
+        {"Section": "Accounts", "Metric": "Total assets", "Value": total_assets},
+        {"Section": "Debt", "Metric": "Total debt", "Value": total_debt},
+        {"Section": "Debt", "Metric": "Credit utilisation %", "Value": credit_utilisation},
+        {"Section": "Net worth", "Metric": "Net worth", "Value": net_worth},
+        {"Section": "Transactions", "Metric": "Income logged", "Value": month_income},
+        {"Section": "Transactions", "Metric": "Spending logged", "Value": month_spending},
+        {"Section": "Transactions", "Metric": "Transfers logged", "Value": month_transfers},
+        {"Section": "Transactions", "Metric": "Monthly net", "Value": month_net},
+        {"Section": "Subscriptions", "Metric": "Active subscription count", "Value": active_subscription_count},
+        {"Section": "Subscriptions", "Metric": "Subscription total this month", "Value": subscription_total},
+        {"Section": "Budget", "Metric": "Expected income", "Value": expected_income},
+        {"Section": "Budget", "Metric": "Planned outgoing", "Value": planned_outgoing},
+        {"Section": "Budget", "Metric": "Budget remaining", "Value": budget_remaining},
+        {"Section": "Budget", "Metric": "Budget status", "Value": budget_status},
+        {"Section": "Savings goals", "Metric": "Active goal count", "Value": active_goal_count},
+        {"Section": "Savings goals", "Metric": "Goal target", "Value": goal_target},
+        {"Section": "Savings goals", "Metric": "Goal saved", "Value": goal_saved},
+        {"Section": "Savings goals", "Metric": "Goal progress %", "Value": goal_progress},
+    ]
+
+    return pd.DataFrame(summary_rows)
+
+
+
 def score_personal_finance_health(
     remaining_budget,
     income_actual,
@@ -1409,6 +1570,41 @@ def render_sidebar_summary():
 
 if not require_password():
     st.stop()
+
+
+def check_password():
+    if "authenticated" not in st.session_state:
+        st.session_state["authenticated"] = False
+
+    if st.session_state["authenticated"]:
+        return True
+
+    st.markdown("## HustleHQ Login")
+    st.caption("Enter your app password to continue.")
+
+    with st.form("hustlehq_login_form", clear_on_submit=False):
+        password_attempt = st.text_input(
+            "Password",
+            type="password",
+            key="hustlehq_password_attempt",
+            placeholder="Enter password"
+        )
+
+        submitted_login = st.form_submit_button("Log in")
+
+    if submitted_login:
+        saved_password = get_app_password()
+
+        if password_attempt == saved_password:
+            st.session_state["authenticated"] = True
+            st.success("Login successful.")
+            st.rerun()
+        else:
+            st.error("Incorrect password.")
+
+    st.info("Tip: type your password and press Enter to log in.")
+    return False
+
 
 
 st.sidebar.markdown("## 💼 HustleHQ")
@@ -2145,6 +2341,7 @@ if page == "Personal Finance":
             "Balance Manager",
             "Net Worth History",
             "Intelligence",
+            "Reports",
         ]
     )
 
@@ -5343,6 +5540,377 @@ if page == "Personal Finance":
         st.info(
             "This intelligence tab depends on your data quality. The more often you update balances, budgets, transactions, "
             "subscriptions and savings goals, the more useful the score becomes."
+        )
+
+
+
+
+    with personal_tabs[14]:
+        st.markdown("### Reports")
+        st.subheader("Export personal finance summaries, reports and evidence packs")
+
+        account_records_r = load_personal_account_records()
+        subscription_records_r = load_personal_subscription_records()
+        transaction_records_r = load_personal_transaction_records()
+        budget_records_r = load_personal_budget_records()
+        savings_goal_records_r = load_personal_savings_goal_records()
+        net_worth_history_r = load_personal_net_worth_history()
+
+        today = pd.Timestamp.today()
+
+        report_col1, report_col2 = st.columns(2)
+
+        with report_col1:
+            selected_report_month = st.selectbox(
+                "Report month",
+                list(range(1, 13)),
+                index=int(today.month) - 1,
+                format_func=lambda month_number: calendar.month_name[month_number],
+                key="personal_report_month_select",
+            )
+
+        with report_col2:
+            selected_report_year = st.number_input(
+                "Report year",
+                min_value=2020,
+                max_value=2100,
+                value=int(today.year),
+                step=1,
+                key="personal_report_year_select",
+            )
+
+        report_summary = build_personal_report_summary(
+            selected_report_year,
+            selected_report_month,
+            account_records_r,
+            subscription_records_r,
+            transaction_records_r,
+            budget_records_r,
+            savings_goal_records_r,
+            net_worth_history_r,
+        )
+
+        st.markdown("### Monthly report summary")
+
+        st.dataframe(report_summary, use_container_width=True)
+
+        st.download_button(
+            "Download monthly report summary CSV",
+            data=report_summary.to_csv(index=False).encode("utf-8"),
+            file_name="hustlehq_personal_monthly_report_summary.csv",
+            mime="text/csv",
+        )
+
+        st.markdown("---")
+
+        st.markdown("### Report sections")
+
+        report_tabs = st.tabs(
+            [
+                "Accounts",
+                "Transactions",
+                "Subscriptions",
+                "Budget",
+                "Savings Goals",
+                "Net Worth",
+                "Export Pack",
+            ]
+        )
+
+        with report_tabs[0]:
+            st.markdown("#### Accounts report")
+
+            if account_records_r.empty:
+                st.warning("No account records found.")
+            else:
+                accounts_export = account_records_r.copy()
+                accounts_export["balance"] = pd.to_numeric(accounts_export["balance"], errors="coerce").fillna(0)
+                accounts_export["credit_limit"] = pd.to_numeric(accounts_export["credit_limit"], errors="coerce").fillna(0)
+
+                st.dataframe(accounts_export, use_container_width=True)
+
+                account_type_report = (
+                    accounts_export
+                    .groupby("account_type", as_index=False)["balance"]
+                    .sum()
+                    .sort_values("balance", ascending=False)
+                )
+
+                provider_report = (
+                    accounts_export
+                    .groupby("provider", as_index=False)["balance"]
+                    .sum()
+                    .sort_values("balance", ascending=False)
+                )
+
+                st.markdown("#### By account type")
+                st.dataframe(account_type_report, use_container_width=True)
+
+                st.markdown("#### By provider")
+                st.dataframe(provider_report, use_container_width=True)
+
+                st.download_button(
+                    "Download accounts report CSV",
+                    data=accounts_export.to_csv(index=False).encode("utf-8"),
+                    file_name="hustlehq_personal_accounts_report.csv",
+                    mime="text/csv",
+                )
+
+        with report_tabs[1]:
+            st.markdown("#### Transactions report")
+
+            if transaction_records_r.empty:
+                st.warning("No transaction records found.")
+            else:
+                transaction_export = transaction_records_r.copy()
+                transaction_export["amount"] = pd.to_numeric(transaction_export["amount"], errors="coerce").fillna(0)
+                transaction_export["transaction_date_dt"] = pd.to_datetime(transaction_export["transaction_date"], errors="coerce")
+
+                month_transaction_export = transaction_export[
+                    (transaction_export["transaction_date_dt"].dt.year == int(selected_report_year))
+                    & (transaction_export["transaction_date_dt"].dt.month == int(selected_report_month))
+                ].copy()
+
+                if month_transaction_export.empty:
+                    st.info("No transactions found for the selected report month.")
+                else:
+                    st.dataframe(
+                        month_transaction_export.drop(columns=["transaction_date_dt"], errors="ignore"),
+                        use_container_width=True,
+                    )
+
+                    category_report = (
+                        month_transaction_export[
+                            month_transaction_export["transaction_type"] == "Expense"
+                        ]
+                        .groupby("category", as_index=False)["amount"]
+                        .sum()
+                        .sort_values("amount", ascending=False)
+                    )
+
+                    account_report = (
+                        month_transaction_export
+                        .groupby(["account", "transaction_type"], as_index=False)["amount"]
+                        .sum()
+                        .sort_values("amount", ascending=False)
+                    )
+
+                    st.markdown("#### Spending by category")
+                    st.dataframe(category_report, use_container_width=True)
+
+                    st.markdown("#### Account movement")
+                    st.dataframe(account_report, use_container_width=True)
+
+                    st.download_button(
+                        "Download transactions report CSV",
+                        data=month_transaction_export.drop(columns=["transaction_date_dt"], errors="ignore").to_csv(index=False).encode("utf-8"),
+                        file_name="hustlehq_personal_transactions_report.csv",
+                        mime="text/csv",
+                    )
+
+        with report_tabs[2]:
+            st.markdown("#### Subscriptions report")
+
+            if subscription_records_r.empty:
+                st.warning("No subscription records found.")
+            else:
+                subscription_export = subscription_records_r.copy()
+                subscription_export["amount"] = pd.to_numeric(subscription_export["amount"], errors="coerce").fillna(0)
+                subscription_export["next_payment_date_dt"] = pd.to_datetime(subscription_export["next_payment_date"], errors="coerce")
+
+                month_subscription_export = subscription_export[
+                    (subscription_export["next_payment_date_dt"].dt.year == int(selected_report_year))
+                    & (subscription_export["next_payment_date_dt"].dt.month == int(selected_report_month))
+                ].copy()
+
+                active_subscription_export = subscription_export[
+                    subscription_export["status"] == "Active"
+                ].copy()
+
+                st.markdown("#### Active subscriptions")
+                st.dataframe(active_subscription_export.drop(columns=["next_payment_date_dt"], errors="ignore"), use_container_width=True)
+
+                st.markdown("#### Subscriptions in selected month")
+                st.dataframe(month_subscription_export.drop(columns=["next_payment_date_dt"], errors="ignore"), use_container_width=True)
+
+                subscription_account_report = (
+                    active_subscription_export
+                    .groupby("paid_from_account", as_index=False)["amount"]
+                    .sum()
+                    .sort_values("amount", ascending=False)
+                )
+
+                subscription_category_report = (
+                    active_subscription_export
+                    .groupby("category", as_index=False)["amount"]
+                    .sum()
+                    .sort_values("amount", ascending=False)
+                )
+
+                st.markdown("#### Cost by payment account")
+                st.dataframe(subscription_account_report, use_container_width=True)
+
+                st.markdown("#### Cost by category")
+                st.dataframe(subscription_category_report, use_container_width=True)
+
+                st.download_button(
+                    "Download subscriptions report CSV",
+                    data=subscription_export.drop(columns=["next_payment_date_dt"], errors="ignore").to_csv(index=False).encode("utf-8"),
+                    file_name="hustlehq_personal_subscriptions_report.csv",
+                    mime="text/csv",
+                )
+
+        with report_tabs[3]:
+            st.markdown("#### Budget report")
+
+            if budget_records_r.empty:
+                st.warning("No budget records found.")
+            else:
+                budget_export = budget_records_r.copy()
+
+                selected_month_name = calendar.month_name[int(selected_report_month)]
+
+                selected_budget_report = budget_export[
+                    (budget_export["budget_month"] == selected_month_name)
+                    & (pd.to_numeric(budget_export["budget_year"], errors="coerce").fillna(0).astype(int) == int(selected_report_year))
+                ].copy()
+
+                st.markdown("#### Selected month budget")
+                st.dataframe(selected_budget_report, use_container_width=True)
+
+                st.markdown("#### All budgets")
+                st.dataframe(budget_export, use_container_width=True)
+
+                st.download_button(
+                    "Download budget report CSV",
+                    data=budget_export.to_csv(index=False).encode("utf-8"),
+                    file_name="hustlehq_personal_budget_report.csv",
+                    mime="text/csv",
+                )
+
+        with report_tabs[4]:
+            st.markdown("#### Savings goals report")
+
+            if savings_goal_records_r.empty:
+                st.warning("No savings goal records found.")
+            else:
+                savings_export = savings_goal_records_r.copy()
+                savings_export["target_amount"] = pd.to_numeric(savings_export["target_amount"], errors="coerce").fillna(0)
+                savings_export["current_amount"] = pd.to_numeric(savings_export["current_amount"], errors="coerce").fillna(0)
+
+                savings_export["remaining_amount"] = savings_export["target_amount"] - savings_export["current_amount"]
+                savings_export["remaining_amount"] = savings_export["remaining_amount"].clip(lower=0)
+
+                savings_export["progress_%"] = savings_export.apply(
+                    lambda row: min((row["current_amount"] / row["target_amount"] * 100), 100) if row["target_amount"] > 0 else 0,
+                    axis=1
+                )
+
+                st.dataframe(savings_export, use_container_width=True)
+
+                st.download_button(
+                    "Download savings goals report CSV",
+                    data=savings_export.to_csv(index=False).encode("utf-8"),
+                    file_name="hustlehq_personal_savings_goals_report.csv",
+                    mime="text/csv",
+                )
+
+        with report_tabs[5]:
+            st.markdown("#### Net worth report")
+
+            if net_worth_history_r.empty:
+                st.warning("No net worth history found.")
+            else:
+                net_worth_export = net_worth_history_r.copy()
+                net_worth_export["snapshot_date_dt"] = pd.to_datetime(net_worth_export["snapshot_date"], errors="coerce")
+                net_worth_export = net_worth_export.sort_values("snapshot_date_dt", ascending=True)
+
+                st.dataframe(
+                    net_worth_export.drop(columns=["snapshot_date_dt"], errors="ignore"),
+                    use_container_width=True,
+                )
+
+                if len(net_worth_export) >= 2:
+                    st.line_chart(
+                        net_worth_export.set_index("snapshot_date_dt")[
+                            [
+                                "net_worth",
+                                "total_assets",
+                                "total_debt",
+                            ]
+                        ]
+                    )
+                else:
+                    st.info("Save at least 2 net worth snapshots to show the trend chart.")
+
+                st.download_button(
+                    "Download net worth report CSV",
+                    data=net_worth_export.drop(columns=["snapshot_date_dt"], errors="ignore").to_csv(index=False).encode("utf-8"),
+                    file_name="hustlehq_personal_net_worth_report.csv",
+                    mime="text/csv",
+                )
+
+        with report_tabs[6]:
+            st.markdown("#### Combined export pack")
+
+            st.info(
+                "This section gives you the key personal finance CSVs in one place. "
+                "For now, download each CSV separately. A ZIP export can be added in the next report upgrade."
+            )
+
+            st.download_button(
+                "Download report summary CSV",
+                data=report_summary.to_csv(index=False).encode("utf-8"),
+                file_name="hustlehq_personal_report_summary.csv",
+                mime="text/csv",
+            )
+
+            st.download_button(
+                "Download accounts CSV",
+                data=account_records_r.to_csv(index=False).encode("utf-8"),
+                file_name="hustlehq_personal_accounts.csv",
+                mime="text/csv",
+            )
+
+            st.download_button(
+                "Download subscriptions CSV",
+                data=subscription_records_r.to_csv(index=False).encode("utf-8"),
+                file_name="hustlehq_personal_subscriptions.csv",
+                mime="text/csv",
+            )
+
+            st.download_button(
+                "Download transactions CSV",
+                data=transaction_records_r.to_csv(index=False).encode("utf-8"),
+                file_name="hustlehq_personal_transactions.csv",
+                mime="text/csv",
+            )
+
+            st.download_button(
+                "Download budgets CSV",
+                data=budget_records_r.to_csv(index=False).encode("utf-8"),
+                file_name="hustlehq_personal_budgets.csv",
+                mime="text/csv",
+            )
+
+            st.download_button(
+                "Download savings goals CSV",
+                data=savings_goal_records_r.to_csv(index=False).encode("utf-8"),
+                file_name="hustlehq_personal_savings_goals.csv",
+                mime="text/csv",
+            )
+
+            st.download_button(
+                "Download net worth history CSV",
+                data=net_worth_history_r.to_csv(index=False).encode("utf-8"),
+                file_name="hustlehq_personal_net_worth_history.csv",
+                mime="text/csv",
+            )
+
+        st.markdown("---")
+
+        st.info(
+            "Use Reports at the end of each month. It pulls together accounts, transactions, subscriptions, budgets, goals and net worth."
         )
 
 
