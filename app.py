@@ -847,6 +847,340 @@ def upsert_personal_setting(settings_records, setting_name, setting_value):
     return settings_records
 
 
+def calculate_emergency_fund_status(account_records, settings_records):
+    net_worth_data = calculate_personal_net_worth(account_records)
+
+    savings = float(net_worth_data["savings"])
+    current_cash = float(net_worth_data["current_cash"])
+
+    emergency_target = float(get_personal_setting(settings_records, "emergency_fund_target", "1000"))
+    minimum_cash_buffer = float(get_personal_setting(settings_records, "minimum_cash_buffer", "100"))
+
+    emergency_progress = 0
+
+    if emergency_target > 0:
+        emergency_progress = min((savings / emergency_target) * 100, 100)
+
+    cash_buffer_status = "OK" if current_cash >= minimum_cash_buffer else "Low"
+
+    if emergency_progress >= 100:
+        emergency_label = "Fully funded"
+    elif emergency_progress >= 50:
+        emergency_label = "Building"
+    elif emergency_progress > 0:
+        emergency_label = "Early stage"
+    else:
+        emergency_label = "Not started"
+
+    return {
+        "savings": savings,
+        "current_cash": current_cash,
+        "emergency_target": emergency_target,
+        "minimum_cash_buffer": minimum_cash_buffer,
+        "emergency_progress": emergency_progress,
+        "cash_buffer_status": cash_buffer_status,
+        "emergency_label": emergency_label,
+    }
+
+
+def calculate_next_30_day_cashflow(account_records, subscription_records, transaction_records, plan_records):
+    net_worth_data = calculate_personal_net_worth(account_records)
+
+    starting_cash = float(net_worth_data["current_cash"])
+
+    today = pd.Timestamp.today().normalize()
+    end_date = today + pd.Timedelta(days=30)
+
+    expected_income = 0
+    expected_outgoing = 0
+    scheduled_items = []
+
+    if not transaction_records.empty:
+        transactions = transaction_records.copy()
+        transactions["amount"] = pd.to_numeric(transactions["amount"], errors="coerce").fillna(0)
+        transactions["transaction_date_dt"] = pd.to_datetime(transactions["transaction_date"], errors="coerce")
+
+        planned_transactions = transactions[
+            (transactions["status"] == "Planned")
+            & (transactions["transaction_date_dt"] >= today)
+            & (transactions["transaction_date_dt"] <= end_date)
+        ].copy()
+
+        for _, row in planned_transactions.iterrows():
+            amount = float(row["amount"])
+
+            if row["transaction_type"] == "Income":
+                expected_income += amount
+                cash_impact = amount
+            elif row["transaction_type"] == "Expense":
+                expected_outgoing += amount
+                cash_impact = -amount
+            else:
+                cash_impact = 0
+
+            scheduled_items.append(
+                {
+                    "Date": str(row["transaction_date"]),
+                    "Type": row["transaction_type"],
+                    "Name": row["description"],
+                    "Amount": amount,
+                    "Cash impact": cash_impact,
+                    "Source": "Planned transaction",
+                }
+            )
+
+    if not subscription_records.empty:
+        subscriptions = subscription_records.copy()
+        subscriptions["amount"] = pd.to_numeric(subscriptions["amount"], errors="coerce").fillna(0)
+        subscriptions["next_payment_date_dt"] = pd.to_datetime(subscriptions["next_payment_date"], errors="coerce")
+
+        upcoming_subs = subscriptions[
+            (subscriptions["status"] == "Active")
+            & (subscriptions["next_payment_date_dt"] >= today)
+            & (subscriptions["next_payment_date_dt"] <= end_date)
+        ].copy()
+
+        for _, row in upcoming_subs.iterrows():
+            amount = float(row["amount"])
+            expected_outgoing += amount
+
+            scheduled_items.append(
+                {
+                    "Date": str(row["next_payment_date"]),
+                    "Type": "Subscription",
+                    "Name": row["subscription_name"],
+                    "Amount": amount,
+                    "Cash impact": -amount,
+                    "Source": "Subscription",
+                }
+            )
+
+    if not plan_records.empty:
+        plans = plan_records.copy()
+        plans["monthly_income"] = pd.to_numeric(plans["monthly_income"], errors="coerce").fillna(0)
+        plans["monthly_fixed_costs"] = pd.to_numeric(plans["monthly_fixed_costs"], errors="coerce").fillna(0)
+        plans["monthly_debt_payment"] = pd.to_numeric(plans["monthly_debt_payment"], errors="coerce").fillna(0)
+        plans["monthly_savings"] = pd.to_numeric(plans["monthly_savings"], errors="coerce").fillna(0)
+        plans["deadline_dt"] = pd.to_datetime(plans["deadline"], errors="coerce")
+
+        upcoming_payday_plans = plans[
+            (plans["plan_type"] == "Payday Plan")
+            & (plans["status"] == "Active")
+            & (plans["deadline_dt"] >= today)
+            & (plans["deadline_dt"] <= end_date)
+        ].copy()
+
+        for _, row in upcoming_payday_plans.iterrows():
+            income_amount = float(row["monthly_income"])
+            outgoing_amount = float(row["monthly_fixed_costs"]) + float(row["monthly_debt_payment"]) + float(row["monthly_savings"])
+
+            expected_income += income_amount
+            expected_outgoing += outgoing_amount
+
+            scheduled_items.append(
+                {
+                    "Date": str(row["deadline"]),
+                    "Type": "Payday Plan",
+                    "Name": row["plan_name"],
+                    "Amount": income_amount - outgoing_amount,
+                    "Cash impact": income_amount - outgoing_amount,
+                    "Source": "Planning Centre",
+                }
+            )
+
+    ending_cash = starting_cash + expected_income - expected_outgoing
+
+    scheduled_df = pd.DataFrame(
+        scheduled_items,
+        columns=["Date", "Type", "Name", "Amount", "Cash impact", "Source"]
+    )
+
+    if not scheduled_df.empty:
+        scheduled_df = scheduled_df.sort_values("Date", ascending=True)
+
+    return {
+        "starting_cash": starting_cash,
+        "expected_income": expected_income,
+        "expected_outgoing": expected_outgoing,
+        "ending_cash": ending_cash,
+        "scheduled_items": scheduled_df,
+    }
+
+
+def build_smart_personal_recommendations(
+    account_records,
+    subscription_records,
+    transaction_records,
+    budget_records,
+    savings_goal_records,
+    net_worth_history,
+    plan_records,
+    settings_records,
+):
+    recommendations = []
+
+    emergency = calculate_emergency_fund_status(account_records, settings_records)
+    cashflow = calculate_next_30_day_cashflow(account_records, subscription_records, transaction_records, plan_records)
+    risk_flags = get_personal_risk_flags(account_records, subscription_records, transaction_records, budget_records, savings_goal_records)
+    quality_checks = get_personal_data_quality_checks(account_records, subscription_records, transaction_records, budget_records, savings_goal_records, net_worth_history)
+
+    if emergency["cash_buffer_status"] == "Low":
+        recommendations.append(
+            {
+                "Priority": "High",
+                "Area": "Cash buffer",
+                "Recommendation": f"Build current cash above £{emergency['minimum_cash_buffer']:,.2f}.",
+                "Reason": "Your tracked current cash is below your minimum buffer setting.",
+            }
+        )
+
+    if emergency["emergency_progress"] < 50:
+        recommendations.append(
+            {
+                "Priority": "Medium",
+                "Area": "Emergency fund",
+                "Recommendation": "Add a realistic emergency fund contribution to your next payday plan.",
+                "Reason": "Your emergency fund is under 50% of the target.",
+            }
+        )
+
+    if cashflow["ending_cash"] < 0:
+        recommendations.append(
+            {
+                "Priority": "High",
+                "Area": "30-day cashflow",
+                "Recommendation": "Reduce planned spending or delay non-essential payments.",
+                "Reason": "Your next 30-day forecast goes negative.",
+            }
+        )
+    elif cashflow["ending_cash"] < emergency["minimum_cash_buffer"]:
+        recommendations.append(
+            {
+                "Priority": "Medium",
+                "Area": "30-day cashflow",
+                "Recommendation": "Keep spending tight until your next income lands.",
+                "Reason": "Your forecasted ending cash is below your preferred minimum buffer.",
+            }
+        )
+
+    if not risk_flags.empty:
+        high_risks = risk_flags[risk_flags["Level"] == "High"]
+
+        for _, row in high_risks.iterrows():
+            recommendations.append(
+                {
+                    "Priority": "High",
+                    "Area": row["Risk"],
+                    "Recommendation": row["Action"],
+                    "Reason": row["Detail"],
+                }
+            )
+
+    missing_quality = quality_checks[quality_checks["Status"] == "Missing"]
+
+    if not missing_quality.empty:
+        for _, row in missing_quality.head(3).iterrows():
+            recommendations.append(
+                {
+                    "Priority": "Low",
+                    "Area": row["Area"],
+                    "Recommendation": row["Action"],
+                    "Reason": row["Issue"],
+                }
+            )
+
+    if not subscription_records.empty:
+        subs = subscription_records.copy()
+        subs["amount"] = pd.to_numeric(subs["amount"], errors="coerce").fillna(0)
+        active_subs = subs[subs["status"] == "Active"].copy()
+
+        if not active_subs.empty:
+            largest_sub = active_subs.sort_values("amount", ascending=False).iloc[0]
+
+            if float(largest_sub["amount"]) >= 15:
+                recommendations.append(
+                    {
+                        "Priority": "Low",
+                        "Area": "Subscriptions",
+                        "Recommendation": f"Review {largest_sub['subscription_name']} and decide if it still earns its monthly cost.",
+                        "Reason": f"It is one of your larger active subscriptions at £{float(largest_sub['amount']):,.2f}.",
+                    }
+                )
+
+    if not recommendations:
+        recommendations.append(
+            {
+                "Priority": "OK",
+                "Area": "General",
+                "Recommendation": "Keep updating the app weekly and saving net worth snapshots monthly.",
+                "Reason": "No urgent recommendations were generated from the current data.",
+            }
+        )
+
+    return pd.DataFrame(recommendations)
+
+
+def build_personal_printable_report_text(
+    account_records,
+    subscription_records,
+    transaction_records,
+    budget_records,
+    savings_goal_records,
+    net_worth_history,
+    plan_records,
+    settings_records,
+):
+    today = pd.Timestamp.today().date()
+
+    net_worth_data = calculate_personal_net_worth(account_records)
+    emergency = calculate_emergency_fund_status(account_records, settings_records)
+    cashflow = calculate_next_30_day_cashflow(account_records, subscription_records, transaction_records, plan_records)
+    recommendations = build_smart_personal_recommendations(
+        account_records,
+        subscription_records,
+        transaction_records,
+        budget_records,
+        savings_goal_records,
+        net_worth_history,
+        plan_records,
+        settings_records,
+    )
+
+    report_lines = []
+
+    report_lines.append("HustleHQ Personal Finance Report")
+    report_lines.append(f"Generated: {today}")
+    report_lines.append("")
+    report_lines.append("SUMMARY")
+    report_lines.append(f"Current cash: £{float(net_worth_data['current_cash']):,.2f}")
+    report_lines.append(f"Savings: £{float(net_worth_data['savings']):,.2f}")
+    report_lines.append(f"Investments: £{float(net_worth_data['investments']):,.2f}")
+    report_lines.append(f"Debt: £{float(net_worth_data['debts']):,.2f}")
+    report_lines.append(f"Net worth: £{float(net_worth_data['net_worth']):,.2f}")
+    report_lines.append("")
+    report_lines.append("EMERGENCY FUND")
+    report_lines.append(f"Target: £{emergency['emergency_target']:,.2f}")
+    report_lines.append(f"Progress: {emergency['emergency_progress']:,.1f}%")
+    report_lines.append(f"Status: {emergency['emergency_label']}")
+    report_lines.append("")
+    report_lines.append("NEXT 30 DAYS")
+    report_lines.append(f"Starting cash: £{cashflow['starting_cash']:,.2f}")
+    report_lines.append(f"Expected income: £{cashflow['expected_income']:,.2f}")
+    report_lines.append(f"Expected outgoing: £{cashflow['expected_outgoing']:,.2f}")
+    report_lines.append(f"Forecast ending cash: £{cashflow['ending_cash']:,.2f}")
+    report_lines.append("")
+    report_lines.append("RECOMMENDATIONS")
+
+    for _, row in recommendations.iterrows():
+        report_lines.append(f"- [{row['Priority']}] {row['Area']}: {row['Recommendation']} Reason: {row['Reason']}")
+
+    report_lines.append("")
+    report_lines.append("END OF REPORT")
+
+    return "\n".join(report_lines)
+
+
+
 def calculate_move_out_readiness(
     current_savings,
     target_deposit,
@@ -2830,6 +3164,9 @@ if page == "Personal Finance":
             "Command Centre",
             "Planning Centre",
             "Personal Settings",
+            "Final Dashboard",
+            "Printable Report",
+            "Finish Status",
         ]
     )
 
@@ -7238,6 +7575,280 @@ if page == "Personal Finance":
                     st.rerun()
                 else:
                     st.info(f"No file existed for {selected_reset_area}.")
+
+
+
+
+    with personal_tabs[18]:
+        st.markdown("### Final Dashboard")
+        st.subheader("Personal finance overview, forecast, emergency fund and smart recommendations")
+
+        account_records_f = load_personal_account_records()
+        subscription_records_f = load_personal_subscription_records()
+        transaction_records_f = load_personal_transaction_records()
+        budget_records_f = load_personal_budget_records()
+        savings_goal_records_f = load_personal_savings_goal_records()
+        net_worth_history_f = load_personal_net_worth_history()
+        plan_records_f = load_personal_plan_records()
+        settings_records_f = load_personal_settings_records()
+
+        net_worth_f = calculate_personal_net_worth(account_records_f)
+        emergency_f = calculate_emergency_fund_status(account_records_f, settings_records_f)
+        cashflow_f = calculate_next_30_day_cashflow(account_records_f, subscription_records_f, transaction_records_f, plan_records_f)
+        recommendations_f = build_smart_personal_recommendations(
+            account_records_f,
+            subscription_records_f,
+            transaction_records_f,
+            budget_records_f,
+            savings_goal_records_f,
+            net_worth_history_f,
+            plan_records_f,
+            settings_records_f,
+        )
+
+        st.markdown("### Today panel")
+
+        today_col1, today_col2, today_col3, today_col4, today_col5 = st.columns(5)
+
+        today_col1.metric("Cash", f"£{float(net_worth_f['current_cash']):,.2f}")
+        today_col2.metric("Savings", f"£{float(net_worth_f['savings']):,.2f}")
+        today_col3.metric("Investments", f"£{float(net_worth_f['investments']):,.2f}")
+        today_col4.metric("Debt", f"£{float(net_worth_f['debts']):,.2f}")
+        today_col5.metric("Net worth", f"£{float(net_worth_f['net_worth']):,.2f}")
+
+        st.markdown("---")
+
+        st.markdown("### Emergency fund analysis")
+
+        ef_col1, ef_col2, ef_col3, ef_col4 = st.columns(4)
+
+        ef_col1.metric("Emergency target", f"£{emergency_f['emergency_target']:,.2f}")
+        ef_col2.metric("Savings tracked", f"£{emergency_f['savings']:,.2f}")
+        ef_col3.metric("Progress", f"{emergency_f['emergency_progress']:,.1f}%")
+        ef_col4.metric("Status", emergency_f["emergency_label"])
+
+        st.progress(emergency_f["emergency_progress"] / 100)
+
+        if emergency_f["cash_buffer_status"] == "Low":
+            st.error(
+                f"Current cash is below your minimum buffer of £{emergency_f['minimum_cash_buffer']:,.2f}."
+            )
+        else:
+            st.success("Current cash is above your minimum buffer.")
+
+        st.markdown("---")
+
+        st.markdown("### Next 30-day cashflow forecast")
+
+        cashflow_col1, cashflow_col2, cashflow_col3, cashflow_col4 = st.columns(4)
+
+        cashflow_col1.metric("Starting cash", f"£{cashflow_f['starting_cash']:,.2f}")
+        cashflow_col2.metric("Expected income", f"£{cashflow_f['expected_income']:,.2f}")
+        cashflow_col3.metric("Expected outgoing", f"£{cashflow_f['expected_outgoing']:,.2f}")
+        cashflow_col4.metric("Forecast ending cash", f"£{cashflow_f['ending_cash']:,.2f}")
+
+        if cashflow_f["ending_cash"] < 0:
+            st.error("Forecasted cash goes negative in the next 30 days.")
+        elif cashflow_f["ending_cash"] < emergency_f["minimum_cash_buffer"]:
+            st.warning("Forecasted cash stays positive but falls below your preferred buffer.")
+        else:
+            st.success("Forecasted cash remains above your preferred buffer.")
+
+        if cashflow_f["scheduled_items"].empty:
+            st.info("No planned cashflow items found for the next 30 days.")
+        else:
+            st.dataframe(cashflow_f["scheduled_items"], use_container_width=True)
+
+        st.markdown("---")
+
+        st.markdown("### Smart recommendations")
+
+        st.dataframe(recommendations_f, use_container_width=True)
+
+        high_recommendations_f = len(recommendations_f[recommendations_f["Priority"] == "High"])
+        medium_recommendations_f = len(recommendations_f[recommendations_f["Priority"] == "Medium"])
+
+        rec_col1, rec_col2, rec_col3 = st.columns(3)
+
+        rec_col1.metric("High priority", high_recommendations_f)
+        rec_col2.metric("Medium priority", medium_recommendations_f)
+        rec_col3.metric("Total recommendations", len(recommendations_f))
+
+        if high_recommendations_f > 0:
+            st.error("Handle high-priority recommendations first.")
+        elif medium_recommendations_f > 0:
+            st.warning("Medium-priority recommendations should be reviewed soon.")
+        else:
+            st.success("No urgent recommendation pressure found.")
+
+        st.markdown("---")
+
+        st.markdown("### Quick links checklist")
+
+        final_checklist_items = [
+            "Update balances in Accounts",
+            "Import transactions",
+            "Apply transactions in Balance Manager",
+            "Check Intelligence",
+            "Save Net Worth History snapshot",
+            "Download Command Centre backup ZIP",
+            "Export Printable Report",
+        ]
+
+        for item in final_checklist_items:
+            st.checkbox(item, key=f"final_dashboard_check_{item}")
+
+        st.caption("Checklist ticks are session-only.")
+
+
+    with personal_tabs[19]:
+        st.markdown("### Printable Report")
+        st.subheader("Create a simple text report you can save, copy or print")
+
+        account_records_pr = load_personal_account_records()
+        subscription_records_pr = load_personal_subscription_records()
+        transaction_records_pr = load_personal_transaction_records()
+        budget_records_pr = load_personal_budget_records()
+        savings_goal_records_pr = load_personal_savings_goal_records()
+        net_worth_history_pr = load_personal_net_worth_history()
+        plan_records_pr = load_personal_plan_records()
+        settings_records_pr = load_personal_settings_records()
+
+        printable_report_text = build_personal_printable_report_text(
+            account_records_pr,
+            subscription_records_pr,
+            transaction_records_pr,
+            budget_records_pr,
+            savings_goal_records_pr,
+            net_worth_history_pr,
+            plan_records_pr,
+            settings_records_pr,
+        )
+
+        st.markdown("### Report preview")
+
+        st.text_area(
+            "Personal finance report",
+            printable_report_text,
+            height=500,
+        )
+
+        st.download_button(
+            "Download printable report TXT",
+            data=printable_report_text.encode("utf-8"),
+            file_name="hustlehq_personal_finance_report.txt",
+            mime="text/plain",
+        )
+
+        st.info(
+            "This report is intentionally plain text so it opens anywhere and can be copied into Word, Google Docs or Notes."
+        )
+
+
+    with personal_tabs[20]:
+        st.markdown("### Finish Status")
+        st.subheader("Personal Finance build completion and final checks")
+
+        account_records_fs = load_personal_account_records()
+        subscription_records_fs = load_personal_subscription_records()
+        transaction_records_fs = load_personal_transaction_records()
+        budget_records_fs = load_personal_budget_records()
+        savings_goal_records_fs = load_personal_savings_goal_records()
+        net_worth_history_fs = load_personal_net_worth_history()
+        plan_records_fs = load_personal_plan_records()
+
+        completion_df_fs, completion_percentage_fs = get_personal_completion_tracker(
+            account_records_fs,
+            subscription_records_fs,
+            transaction_records_fs,
+            budget_records_fs,
+            savings_goal_records_fs,
+            net_worth_history_fs,
+            plan_records_fs,
+        )
+
+        st.markdown("### Completion score")
+
+        st.metric("Personal Finance completion", f"{completion_percentage_fs:,.1f}%")
+        st.progress(completion_percentage_fs / 100)
+
+        st.dataframe(completion_df_fs, use_container_width=True)
+
+        st.markdown("### Built modules")
+
+        built_modules = pd.DataFrame(
+            [
+                {"Module": "Dashboard", "Status": "Built"},
+                {"Module": "Accounts", "Status": "Built"},
+                {"Module": "Savings", "Status": "Built"},
+                {"Module": "Savings Goals", "Status": "Built"},
+                {"Module": "Debt Manager", "Status": "Built"},
+                {"Module": "Subscriptions", "Status": "Built"},
+                {"Module": "Bills Forecast", "Status": "Built"},
+                {"Module": "Subscription Calendar", "Status": "Built"},
+                {"Module": "Monthly Budget", "Status": "Built"},
+                {"Module": "Transactions", "Status": "Built"},
+                {"Module": "Import Transactions CSV", "Status": "Built"},
+                {"Module": "Balance Manager", "Status": "Built"},
+                {"Module": "Net Worth History", "Status": "Built"},
+                {"Module": "Intelligence", "Status": "Built"},
+                {"Module": "Reports", "Status": "Built"},
+                {"Module": "Command Centre", "Status": "Built"},
+                {"Module": "Planning Centre", "Status": "Built"},
+                {"Module": "Personal Settings", "Status": "Built"},
+                {"Module": "Final Dashboard", "Status": "Built"},
+                {"Module": "Printable Report", "Status": "Built"},
+            ]
+        )
+
+        st.dataframe(built_modules, use_container_width=True)
+
+        st.markdown("### Final recommended routine")
+
+        routine_rows = pd.DataFrame(
+            [
+                {
+                    "Frequency": "Daily/quick",
+                    "Task": "Check cash, upcoming subscriptions and any urgent recommendation.",
+                },
+                {
+                    "Frequency": "Weekly",
+                    "Task": "Update balances, import transactions, apply transactions and download backup ZIP.",
+                },
+                {
+                    "Frequency": "Monthly",
+                    "Task": "Create budget, save net worth snapshot, export report and review savings goals.",
+                },
+                {
+                    "Frequency": "Before payday",
+                    "Task": "Use Payday Planner to split income between debt, savings, bills and spending.",
+                },
+                {
+                    "Frequency": "Before moving out",
+                    "Task": "Use Move-out Readiness and keep emergency fund/buffer updated.",
+                },
+            ]
+        )
+
+        st.dataframe(routine_rows, use_container_width=True)
+
+        st.download_button(
+            "Download final routine CSV",
+            data=routine_rows.to_csv(index=False).encode("utf-8"),
+            file_name="hustlehq_personal_finance_routine.csv",
+            mime="text/csv",
+        )
+
+        if completion_percentage_fs >= 85:
+            st.success("Personal Finance is now in a strong usable state.")
+        elif completion_percentage_fs >= 60:
+            st.warning("Personal Finance is built, but needs more records to become fully useful.")
+        else:
+            st.error("Personal Finance modules are built, but your records are still too empty for strong insights.")
+
+        st.info(
+            "After this, the app is complete enough to use properly. Future upgrades should be optional polish, real bank connection planning, or UI redesign."
+        )
 
 
 
