@@ -8,6 +8,8 @@ from datetime import date
 import json
 
 import pandas as pd
+import calendar
+import html
 import plotly.express as px
 import streamlit as st
 
@@ -225,6 +227,9 @@ PROJECT_FILE = DATA_FOLDER / "project_records.csv"
 INVOICE_FILE = DATA_FOLDER / "invoice_records.csv"
 RECURRING_EXPENSE_FILE = DATA_FOLDER / "recurring_expense_records.csv"
 CONTACT_FILE = DATA_FOLDER / "contact_records.csv"
+PERSONAL_ACCOUNT_FILE = DATA_FOLDER / "personal_account_records.csv"
+PERSONAL_SUBSCRIPTION_FILE = DATA_FOLDER / "personal_subscription_records.csv"
+
 
 
 def load_income_records():
@@ -640,6 +645,299 @@ def save_contact_records(records):
 
 
 
+def load_personal_account_records():
+    columns = [
+        "date_added",
+        "provider",
+        "account_name",
+        "account_type",
+        "balance",
+        "credit_limit",
+        "status",
+        "notes",
+        "last_updated",
+    ]
+
+    if PERSONAL_ACCOUNT_FILE.exists():
+        records = pd.read_csv(PERSONAL_ACCOUNT_FILE)
+
+        for column in columns:
+            if column not in records.columns:
+                records[column] = ""
+
+        records["balance"] = pd.to_numeric(records["balance"], errors="coerce").fillna(0)
+        records["credit_limit"] = pd.to_numeric(records["credit_limit"], errors="coerce").fillna(0)
+
+        return records[columns]
+
+    return pd.DataFrame(columns=columns)
+
+
+def save_personal_account_records(records):
+    records.to_csv(PERSONAL_ACCOUNT_FILE, index=False)
+
+
+def load_personal_subscription_records():
+    columns = [
+        "date_added",
+        "subscription_name",
+        "amount",
+        "category",
+        "paid_from_account",
+        "next_payment_date",
+        "payment_day",
+        "colour",
+        "status",
+        "notes",
+    ]
+
+    if PERSONAL_SUBSCRIPTION_FILE.exists():
+        records = pd.read_csv(PERSONAL_SUBSCRIPTION_FILE)
+
+        for column in columns:
+            if column not in records.columns:
+                records[column] = ""
+
+        records["amount"] = pd.to_numeric(records["amount"], errors="coerce").fillna(0)
+        records["payment_day"] = pd.to_numeric(records["payment_day"], errors="coerce").fillna(0).astype(int)
+
+        return records[columns]
+
+    return pd.DataFrame(columns=columns)
+
+
+def save_personal_subscription_records(records):
+    records.to_csv(PERSONAL_SUBSCRIPTION_FILE, index=False)
+
+
+def calculate_personal_net_worth(account_records):
+    if account_records.empty:
+        return {
+            "current_cash": 0,
+            "savings": 0,
+            "investments": 0,
+            "debts": 0,
+            "net_worth": 0,
+        }
+
+    records = account_records.copy()
+    records["balance"] = pd.to_numeric(records["balance"], errors="coerce").fillna(0)
+
+    current_cash = records[
+        records["account_type"].isin(["Current Account", "Cash"])
+    ]["balance"].sum()
+
+    savings = records[
+        records["account_type"] == "Savings Account"
+    ]["balance"].sum()
+
+    investments = records[
+        records["account_type"] == "Investment"
+    ]["balance"].sum()
+
+    debts = records[
+        records["account_type"].isin(["Credit Card", "Loan/Debt"])
+    ]["balance"].sum()
+
+    net_worth = current_cash + savings + investments - debts
+
+    return {
+        "current_cash": current_cash,
+        "savings": savings,
+        "investments": investments,
+        "debts": debts,
+        "net_worth": net_worth,
+    }
+
+
+def get_subscription_colour_hex(colour_name):
+    colour_map = {
+        "Emerald": "#10B981",
+        "Blue": "#3B82F6",
+        "Purple": "#8B5CF6",
+        "Pink": "#EC4899",
+        "Amber": "#F59E0B",
+        "Red": "#EF4444",
+        "Slate": "#64748B",
+    }
+
+    return colour_map.get(colour_name, "#10B981")
+
+
+def render_subscription_calendar(subscription_records, selected_year, selected_month):
+    active_subscriptions = subscription_records[
+        subscription_records["status"] == "Active"
+    ].copy()
+
+    if active_subscriptions.empty:
+        return "<p>No active subscriptions to show on the calendar.</p>"
+
+    active_subscriptions["next_payment_date_dt"] = pd.to_datetime(
+        active_subscriptions["next_payment_date"],
+        errors="coerce"
+    )
+
+    month_subscriptions = active_subscriptions[
+        (active_subscriptions["next_payment_date_dt"].dt.year == selected_year)
+        & (active_subscriptions["next_payment_date_dt"].dt.month == selected_month)
+    ].copy()
+
+    events_by_day = {}
+
+    for _, row in month_subscriptions.iterrows():
+        payment_date = row["next_payment_date_dt"]
+
+        if pd.isna(payment_date):
+            continue
+
+        day = int(payment_date.day)
+
+        if day not in events_by_day:
+            events_by_day[day] = []
+
+        events_by_day[day].append(
+            {
+                "name": str(row["subscription_name"]),
+                "amount": float(row["amount"]),
+                "colour": str(row["colour"]),
+                "account": str(row["paid_from_account"]),
+            }
+        )
+
+    cal = calendar.Calendar(firstweekday=0)
+    month_days = cal.monthdayscalendar(selected_year, selected_month)
+    month_name = calendar.month_name[selected_month]
+
+    html_output = f"""
+    <style>
+    .pf-calendar {{
+        width: 100%;
+        border-collapse: separate;
+        border-spacing: 8px;
+        margin-top: 12px;
+    }}
+
+    .pf-calendar th {{
+        text-align: center;
+        color: #334155;
+        font-size: 0.9rem;
+        padding-bottom: 6px;
+    }}
+
+    .pf-calendar td {{
+        background: #FFFFFF;
+        border: 1px solid #E2E8F0;
+        border-radius: 14px;
+        min-height: 88px;
+        height: 88px;
+        vertical-align: top;
+        padding: 8px;
+        width: 14.2%;
+        box-shadow: 0 1px 2px rgba(15, 23, 42, 0.05);
+    }}
+
+    .pf-calendar .empty-day {{
+        background: #F8FAFC;
+        border: 1px solid #EEF2F7;
+    }}
+
+    .pf-day-number {{
+        font-weight: 700;
+        color: #0F172A;
+        margin-bottom: 4px;
+    }}
+
+    .pf-event {{
+        border-radius: 999px;
+        padding: 3px 7px;
+        margin-top: 4px;
+        color: white;
+        font-size: 0.72rem;
+        font-weight: 600;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+    }}
+
+    .pf-glow {{
+        animation: pfPulse 1.9s infinite;
+    }}
+
+    @keyframes pfPulse {{
+        0% {{ box-shadow: 0 0 0 rgba(16, 185, 129, 0.0); }}
+        50% {{ box-shadow: 0 0 18px rgba(16, 185, 129, 0.45); }}
+        100% {{ box-shadow: 0 0 0 rgba(16, 185, 129, 0.0); }}
+    }}
+
+    @media (max-width: 768px) {{
+        .pf-calendar {{
+            border-spacing: 4px;
+        }}
+
+        .pf-calendar td {{
+            min-height: 72px;
+            height: 72px;
+            padding: 5px;
+        }}
+
+        .pf-event {{
+            font-size: 0.62rem;
+            padding: 2px 5px;
+        }}
+    }}
+    </style>
+
+    <h3>{month_name} {selected_year}</h3>
+    <table class="pf-calendar">
+        <tr>
+            <th>Mon</th>
+            <th>Tue</th>
+            <th>Wed</th>
+            <th>Thu</th>
+            <th>Fri</th>
+            <th>Sat</th>
+            <th>Sun</th>
+        </tr>
+    """
+
+    for week in month_days:
+        html_output += "<tr>"
+
+        for day in week:
+            if day == 0:
+                html_output += '<td class="empty-day"></td>'
+            else:
+                day_events = events_by_day.get(day, [])
+                glow_class = "pf-glow" if day_events else ""
+
+                html_output += f'<td class="{glow_class}">'
+                html_output += f'<div class="pf-day-number">{day}</div>'
+
+                for event in day_events[:3]:
+                    colour_hex = get_subscription_colour_hex(event["colour"])
+                    safe_name = html.escape(event["name"])
+                    safe_account = html.escape(event["account"])
+                    amount = event["amount"]
+
+                    html_output += (
+                        f'<div class="pf-event" style="background:{colour_hex};">'
+                        f'{safe_name} £{amount:,.2f}'
+                        f'</div>'
+                    )
+
+                if len(day_events) > 3:
+                    html_output += f'<div style="font-size:0.7rem;color:#64748B;margin-top:4px;">+{len(day_events) - 3} more</div>'
+
+                html_output += "</td>"
+
+        html_output += "</tr>"
+
+    html_output += "</table>"
+
+    return html_output
+
+
+
 def render_sidebar_summary():
     income_records = load_income_records()
     expense_records = load_expense_records()
@@ -690,6 +988,7 @@ page = st.sidebar.radio(
     [
         "Dashboard",
         "Mobile Quick Guide",
+        "Personal Finance",
         "Add Income",
         "Import Income CSV",
         "Add Expense",
@@ -1183,6 +1482,578 @@ st.markdown(
     """,
     unsafe_allow_html=True
 )
+
+
+if page == "Personal Finance":
+    st.title("Personal Finance")
+    st.subheader("Personal money, debt, savings and subscription control centre")
+
+    st.info(
+        "This section is for personal finance tracking. Bank connections are not live yet. "
+        "For now, update balances manually. Later, this can be upgraded with Open Banking where available."
+    )
+
+    account_records = load_personal_account_records()
+    subscription_records = load_personal_subscription_records()
+
+    net_worth_data = calculate_personal_net_worth(account_records)
+
+    col1, col2, col3, col4, col5 = st.columns(5)
+
+    col1.metric("Current cash", f"£{net_worth_data['current_cash']:,.2f}")
+    col2.metric("Savings", f"£{net_worth_data['savings']:,.2f}")
+    col3.metric("Investments", f"£{net_worth_data['investments']:,.2f}")
+    col4.metric("Debt", f"£{net_worth_data['debts']:,.2f}")
+    col5.metric("Net worth", f"£{net_worth_data['net_worth']:,.2f}")
+
+    st.markdown("---")
+
+    personal_tabs = st.tabs(
+        [
+            "Overview",
+            "Accounts",
+            "Savings",
+            "Subscriptions",
+            "Subscription Calendar",
+        ]
+    )
+
+    bank_options = [
+        "Santander",
+        "NatWest",
+        "Zopa",
+        "American Express",
+        "Nationwide",
+        "Lloyds",
+        "Revolut",
+        "Monzo",
+        "Halifax",
+        "Other",
+    ]
+
+    with personal_tabs[0]:
+        st.markdown("### Personal finance overview")
+
+        if account_records.empty:
+            st.warning("No personal accounts added yet. Go to the Accounts tab to add your bank, savings and credit accounts.")
+        else:
+            display_accounts = account_records.copy()
+            display_accounts["balance"] = pd.to_numeric(display_accounts["balance"], errors="coerce").fillna(0)
+            display_accounts["credit_limit"] = pd.to_numeric(display_accounts["credit_limit"], errors="coerce").fillna(0)
+
+            st.dataframe(display_accounts, use_container_width=True)
+
+            provider_summary = display_accounts.groupby("provider", as_index=False)["balance"].sum()
+            provider_summary = provider_summary.sort_values("balance", ascending=False)
+
+            st.markdown("### Balance by provider")
+            st.dataframe(provider_summary, use_container_width=True)
+
+        st.markdown("### Subscription summary")
+
+        if subscription_records.empty:
+            st.warning("No subscriptions added yet.")
+        else:
+            active_subscriptions = subscription_records[subscription_records["status"] == "Active"].copy()
+            active_subscriptions["amount"] = pd.to_numeric(active_subscriptions["amount"], errors="coerce").fillna(0)
+
+            monthly_subscription_total = active_subscriptions["amount"].sum() if not active_subscriptions.empty else 0
+            yearly_subscription_total = monthly_subscription_total * 12
+
+            sub_col1, sub_col2, sub_col3 = st.columns(3)
+
+            sub_col1.metric("Active subscriptions", len(active_subscriptions))
+            sub_col2.metric("Monthly subscription cost", f"£{monthly_subscription_total:,.2f}")
+            sub_col3.metric("Yearly subscription cost", f"£{yearly_subscription_total:,.2f}")
+
+            subscription_records["next_payment_date_dt"] = pd.to_datetime(
+                subscription_records["next_payment_date"],
+                errors="coerce"
+            )
+
+            today = pd.Timestamp.today().normalize()
+            due_soon = subscription_records[
+                (subscription_records["status"] == "Active")
+                & (subscription_records["next_payment_date_dt"] >= today)
+                & (subscription_records["next_payment_date_dt"] <= today + pd.Timedelta(days=7))
+            ].copy()
+
+            if due_soon.empty:
+                st.success("No active subscriptions due in the next 7 days.")
+            else:
+                st.warning(f"{len(due_soon)} subscription(s) due in the next 7 days.")
+                st.dataframe(
+                    due_soon[
+                        [
+                            "subscription_name",
+                            "amount",
+                            "paid_from_account",
+                            "next_payment_date",
+                            "colour",
+                        ]
+                    ],
+                    use_container_width=True,
+                )
+
+    with personal_tabs[1]:
+        st.markdown("### Add personal account")
+
+        with st.form("add_personal_account_form"):
+            col_a, col_b = st.columns(2)
+
+            with col_a:
+                provider = st.selectbox("Bank/provider", bank_options)
+
+                account_name = st.text_input(
+                    "Account name",
+                    placeholder="Example: NatWest Current, Amex Card, Zopa Smart Saver"
+                )
+
+                account_type = st.selectbox(
+                    "Account type",
+                    [
+                        "Current Account",
+                        "Savings Account",
+                        "Credit Card",
+                        "Loan/Debt",
+                        "Investment",
+                        "Cash",
+                    ]
+                )
+
+            with col_b:
+                balance = st.number_input(
+                    "Balance / amount owed (£)",
+                    min_value=0.0,
+                    step=10.0,
+                    value=0.0,
+                    help="For current/savings accounts, enter the money you have. For credit cards/loans, enter the amount owed."
+                )
+
+                credit_limit = st.number_input(
+                    "Credit limit (£)",
+                    min_value=0.0,
+                    step=50.0,
+                    value=0.0,
+                    help="Only needed for credit cards or overdraft-style accounts."
+                )
+
+                status = st.selectbox(
+                    "Status",
+                    [
+                        "Active",
+                        "Closed",
+                        "Paused",
+                    ]
+                )
+
+            notes = st.text_area("Notes", placeholder="Example: Main spending account, emergency fund, card used for Plan It, etc.")
+
+            submitted_account = st.form_submit_button("Save personal account")
+
+        if submitted_account:
+            if not account_name.strip():
+                st.error("Add an account name before saving.")
+            else:
+                new_account = pd.DataFrame(
+                    [
+                        {
+                            "date_added": str(pd.Timestamp.today().date()),
+                            "provider": provider,
+                            "account_name": account_name.strip(),
+                            "account_type": account_type,
+                            "balance": balance,
+                            "credit_limit": credit_limit,
+                            "status": status,
+                            "notes": notes.strip(),
+                            "last_updated": str(pd.Timestamp.today().date()),
+                        }
+                    ]
+                )
+
+                account_records = pd.concat([account_records, new_account], ignore_index=True)
+                save_personal_account_records(account_records)
+
+                st.success("Personal account saved.")
+                st.rerun()
+
+        st.markdown("### Account records")
+
+        if account_records.empty:
+            st.warning("No accounts saved yet.")
+        else:
+            st.dataframe(account_records, use_container_width=True)
+
+            st.markdown("### Update account balance")
+
+            update_options = [
+                f"{index} - {row['provider']} - {row['account_name']} ({row['account_type']})"
+                for index, row in account_records.iterrows()
+            ]
+
+            selected_account_update = st.selectbox(
+                "Choose account to update",
+                update_options,
+                key="personal_account_update_select"
+            )
+
+            selected_update_index = int(selected_account_update.split(" - ")[0])
+            selected_update_row = account_records.loc[selected_update_index]
+
+            new_balance = st.number_input(
+                "New balance / amount owed (£)",
+                min_value=0.0,
+                step=10.0,
+                value=float(selected_update_row["balance"]),
+                key="personal_account_new_balance"
+            )
+
+            if st.button("Update selected account balance"):
+                account_records.loc[selected_update_index, "balance"] = new_balance
+                account_records.loc[selected_update_index, "last_updated"] = str(pd.Timestamp.today().date())
+                save_personal_account_records(account_records)
+
+                st.success("Account balance updated.")
+                st.rerun()
+
+            st.markdown("### Delete account")
+
+            selected_account_delete = st.selectbox(
+                "Choose account to delete",
+                update_options,
+                key="personal_account_delete_select"
+            )
+
+            if st.button("Delete selected account"):
+                selected_delete_index = int(selected_account_delete.split(" - ")[0])
+                account_records = account_records.drop(index=selected_delete_index).reset_index(drop=True)
+                save_personal_account_records(account_records)
+
+                st.success("Account deleted.")
+                st.rerun()
+
+            st.download_button(
+                "Download personal accounts CSV",
+                data=account_records.to_csv(index=False).encode("utf-8"),
+                file_name="hustlehq_personal_accounts.csv",
+                mime="text/csv",
+            )
+
+    with personal_tabs[2]:
+        st.markdown("### Savings tracker")
+
+        savings_records = account_records[
+            account_records["account_type"] == "Savings Account"
+        ].copy()
+
+        if savings_records.empty:
+            st.warning("No savings accounts added yet. Add them in the Accounts tab using account type: Savings Account.")
+        else:
+            savings_records["balance"] = pd.to_numeric(savings_records["balance"], errors="coerce").fillna(0)
+
+            total_savings = savings_records["balance"].sum()
+
+            st.metric("Total savings", f"£{total_savings:,.2f}")
+
+            st.dataframe(
+                savings_records[
+                    [
+                        "provider",
+                        "account_name",
+                        "balance",
+                        "status",
+                        "last_updated",
+                        "notes",
+                    ]
+                ],
+                use_container_width=True,
+            )
+
+        st.info(
+            "Savings goals will come in Part 2P. For Part 1P, this section focuses on recording how much is inside each savings account."
+        )
+
+    with personal_tabs[3]:
+        st.markdown("### Add subscription")
+
+        account_options = []
+
+        if not account_records.empty:
+            account_options = [
+                f"{row['provider']} - {row['account_name']}"
+                for _, row in account_records.iterrows()
+            ]
+
+        fallback_account_options = [
+            "Santander",
+            "NatWest",
+            "Zopa",
+            "American Express",
+            "Nationwide",
+            "Lloyds",
+            "Revolut",
+            "Monzo",
+            "Halifax",
+            "Other",
+        ]
+
+        paid_from_options = account_options if account_options else fallback_account_options
+
+        with st.form("add_personal_subscription_form"):
+            col_s1, col_s2 = st.columns(2)
+
+            with col_s1:
+                subscription_name = st.text_input(
+                    "Subscription name",
+                    placeholder="Example: Spotify, Canva, iCloud, Gym, Netflix"
+                )
+
+                amount = st.number_input(
+                    "Monthly amount (£)",
+                    min_value=0.0,
+                    step=1.0,
+                    value=0.0
+                )
+
+                category = st.selectbox(
+                    "Category",
+                    [
+                        "Entertainment",
+                        "Phone/Internet",
+                        "Software",
+                        "Finance",
+                        "Shopping",
+                        "Health/Fitness",
+                        "Transport",
+                        "Education",
+                        "Insurance",
+                        "Other",
+                    ]
+                )
+
+                paid_from_account = st.selectbox(
+                    "Paid from account",
+                    paid_from_options
+                )
+
+            with col_s2:
+                next_payment_date = st.date_input("Next payment date")
+
+                payment_day = int(next_payment_date.day)
+
+                colour = st.selectbox(
+                    "Calendar glow colour",
+                    [
+                        "Emerald",
+                        "Blue",
+                        "Purple",
+                        "Pink",
+                        "Amber",
+                        "Red",
+                        "Slate",
+                    ]
+                )
+
+                status = st.selectbox(
+                    "Status",
+                    [
+                        "Active",
+                        "Paused",
+                        "Cancelled",
+                    ]
+                )
+
+            notes = st.text_area("Subscription notes")
+
+            submitted_subscription = st.form_submit_button("Save subscription")
+
+        if submitted_subscription:
+            if not subscription_name.strip():
+                st.error("Add a subscription name before saving.")
+            elif amount <= 0:
+                st.error("Add an amount above £0.")
+            else:
+                new_subscription = pd.DataFrame(
+                    [
+                        {
+                            "date_added": str(pd.Timestamp.today().date()),
+                            "subscription_name": subscription_name.strip(),
+                            "amount": amount,
+                            "category": category,
+                            "paid_from_account": paid_from_account,
+                            "next_payment_date": str(next_payment_date),
+                            "payment_day": payment_day,
+                            "colour": colour,
+                            "status": status,
+                            "notes": notes.strip(),
+                        }
+                    ]
+                )
+
+                subscription_records = pd.concat([subscription_records, new_subscription], ignore_index=True)
+                save_personal_subscription_records(subscription_records)
+
+                st.success("Subscription saved.")
+                st.rerun()
+
+        st.markdown("### Subscription records")
+
+        if subscription_records.empty:
+            st.warning("No subscriptions saved yet.")
+        else:
+            subscription_records["amount"] = pd.to_numeric(subscription_records["amount"], errors="coerce").fillna(0)
+
+            active_subscriptions = subscription_records[
+                subscription_records["status"] == "Active"
+            ].copy()
+
+            active_total = active_subscriptions["amount"].sum() if not active_subscriptions.empty else 0
+
+            col_sub_1, col_sub_2, col_sub_3 = st.columns(3)
+
+            col_sub_1.metric("Subscriptions saved", len(subscription_records))
+            col_sub_2.metric("Active subscriptions", len(active_subscriptions))
+            col_sub_3.metric("Active monthly total", f"£{active_total:,.2f}")
+
+            st.dataframe(subscription_records, use_container_width=True)
+
+            st.markdown("### Update subscription status")
+
+            subscription_options = [
+                f"{index} - {row['subscription_name']} - £{float(row['amount']):,.2f}"
+                for index, row in subscription_records.iterrows()
+            ]
+
+            selected_subscription_update = st.selectbox(
+                "Choose subscription to update",
+                subscription_options,
+                key="personal_subscription_update_select"
+            )
+
+            new_subscription_status = st.selectbox(
+                "New subscription status",
+                [
+                    "Active",
+                    "Paused",
+                    "Cancelled",
+                ],
+                key="personal_subscription_status_value"
+            )
+
+            if st.button("Update selected subscription status"):
+                selected_subscription_index = int(selected_subscription_update.split(" - ")[0])
+                subscription_records.loc[selected_subscription_index, "status"] = new_subscription_status
+                save_personal_subscription_records(subscription_records)
+
+                st.success("Subscription status updated.")
+                st.rerun()
+
+            st.markdown("### Delete subscription")
+
+            selected_subscription_delete = st.selectbox(
+                "Choose subscription to delete",
+                subscription_options,
+                key="personal_subscription_delete_select"
+            )
+
+            if st.button("Delete selected subscription"):
+                selected_delete_index = int(selected_subscription_delete.split(" - ")[0])
+                subscription_records = subscription_records.drop(index=selected_delete_index).reset_index(drop=True)
+                save_personal_subscription_records(subscription_records)
+
+                st.success("Subscription deleted.")
+                st.rerun()
+
+            st.download_button(
+                "Download personal subscriptions CSV",
+                data=subscription_records.to_csv(index=False).encode("utf-8"),
+                file_name="hustlehq_personal_subscriptions.csv",
+                mime="text/csv",
+            )
+
+    with personal_tabs[4]:
+        st.markdown("### Subscription calendar")
+
+        if subscription_records.empty:
+            st.warning("Add subscriptions first, then they will appear on the calendar.")
+        else:
+            today = pd.Timestamp.today()
+
+            cal_col1, cal_col2 = st.columns(2)
+
+            with cal_col1:
+                selected_month = st.selectbox(
+                    "Month",
+                    list(range(1, 13)),
+                    index=int(today.month) - 1,
+                    format_func=lambda month_number: calendar.month_name[month_number],
+                )
+
+            with cal_col2:
+                selected_year = st.number_input(
+                    "Year",
+                    min_value=2020,
+                    max_value=2100,
+                    value=int(today.year),
+                    step=1,
+                )
+
+            calendar_html = render_subscription_calendar(
+                subscription_records,
+                int(selected_year),
+                int(selected_month),
+            )
+
+            st.markdown(calendar_html, unsafe_allow_html=True)
+
+            st.markdown("### Payments in selected month")
+
+            subscription_records["next_payment_date_dt"] = pd.to_datetime(
+                subscription_records["next_payment_date"],
+                errors="coerce"
+            )
+
+            selected_month_subscriptions = subscription_records[
+                (subscription_records["next_payment_date_dt"].dt.year == int(selected_year))
+                & (subscription_records["next_payment_date_dt"].dt.month == int(selected_month))
+            ].copy()
+
+            if selected_month_subscriptions.empty:
+                st.info("No subscriptions found for the selected month.")
+            else:
+                selected_month_subscriptions["amount"] = pd.to_numeric(
+                    selected_month_subscriptions["amount"],
+                    errors="coerce"
+                ).fillna(0)
+
+                selected_month_total = selected_month_subscriptions[
+                    selected_month_subscriptions["status"] == "Active"
+                ]["amount"].sum()
+
+                st.metric("Active subscription payments this month", f"£{selected_month_total:,.2f}")
+
+                st.dataframe(
+                    selected_month_subscriptions[
+                        [
+                            "subscription_name",
+                            "amount",
+                            "paid_from_account",
+                            "next_payment_date",
+                            "colour",
+                            "status",
+                            "category",
+                        ]
+                    ],
+                    use_container_width=True,
+                )
+
+    st.markdown("---")
+
+    st.caption(
+        "Personal Finance is separate from HustleHQ side-hustle records. "
+        "Use this section for personal account balances, debt, savings and subscriptions."
+    )
+
 
 
 if page == "Mobile Quick Guide":
